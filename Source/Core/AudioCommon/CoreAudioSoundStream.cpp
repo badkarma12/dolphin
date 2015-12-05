@@ -1,10 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <CoreServices/CoreServices.h>
 
 #include "AudioCommon/CoreAudioSoundStream.h"
+#include "Common/Logging/Log.h"
 
 OSStatus CoreAudioSound::callback(void *inRefCon,
 	AudioUnitRenderActionFlags *ioActionFlags,
@@ -19,35 +20,29 @@ OSStatus CoreAudioSound::callback(void *inRefCon,
 	return noErr;
 }
 
-CoreAudioSound::CoreAudioSound(CMixer *mixer) : SoundStream(mixer)
-{
-}
-
-CoreAudioSound::~CoreAudioSound()
-{
-}
-
 bool CoreAudioSound::Start()
 {
 	OSStatus err;
 	AURenderCallbackStruct callback_struct;
 	AudioStreamBasicDescription format;
-	ComponentDescription desc;
-	Component component;
+	AudioComponentDescription desc;
+	AudioComponent component;
 
 	desc.componentType = kAudioUnitType_Output;
 	desc.componentSubType = kAudioUnitSubType_DefaultOutput;
 	desc.componentFlags = 0;
 	desc.componentFlagsMask = 0;
 	desc.componentManufacturer = kAudioUnitManufacturer_Apple;
-	component = FindNextComponent(nullptr, &desc);
-	if (component == nullptr) {
+	component = AudioComponentFindNext(nullptr, &desc);
+	if (component == nullptr)
+	{
 		ERROR_LOG(AUDIO, "error finding audio component");
 		return false;
 	}
 
-	err = OpenAComponent(component, &audioUnit);
-	if (err != noErr) {
+	err = AudioComponentInstanceNew(component, &audioUnit);
+	if (err != noErr)
+	{
 		ERROR_LOG(AUDIO, "error opening audio component");
 		return false;
 	}
@@ -58,7 +53,8 @@ bool CoreAudioSound::Start()
 				kAudioUnitProperty_StreamFormat,
 				kAudioUnitScope_Input, 0, &format,
 				sizeof(AudioStreamBasicDescription));
-	if (err != noErr) {
+	if (err != noErr)
+	{
 		ERROR_LOG(AUDIO, "error setting audio format");
 		return false;
 	}
@@ -69,12 +65,13 @@ bool CoreAudioSound::Start()
 				kAudioUnitProperty_SetRenderCallback,
 				kAudioUnitScope_Input, 0, &callback_struct,
 				sizeof callback_struct);
-	if (err != noErr) {
+	if (err != noErr)
+	{
 		ERROR_LOG(AUDIO, "error setting audio callback");
 		return false;
 	}
 
-    err = AudioUnitSetParameter(audioUnit,
+	err = AudioUnitSetParameter(audioUnit,
 					kHALOutputParam_Volume,
 					kAudioUnitParameterFlag_Output, 0,
 					m_volume / 100., 0);
@@ -82,13 +79,15 @@ bool CoreAudioSound::Start()
 		ERROR_LOG(AUDIO, "error setting volume");
 
 	err = AudioUnitInitialize(audioUnit);
-	if (err != noErr) {
+	if (err != noErr)
+	{
 		ERROR_LOG(AUDIO, "error initializing audiounit");
 		return false;
 	}
 
 	err = AudioOutputUnitStart(audioUnit);
-	if (err != noErr) {
+	if (err != noErr)
+	{
 		ERROR_LOG(AUDIO, "error starting audiounit");
 		return false;
 	}
@@ -99,7 +98,7 @@ bool CoreAudioSound::Start()
 void CoreAudioSound::SetVolume(int volume)
 {
 	OSStatus err;
-    m_volume = volume;
+	m_volume = volume;
 
 	err = AudioUnitSetParameter(audioUnit,
 					kHALOutputParam_Volume,
@@ -125,7 +124,7 @@ void CoreAudioSound::Stop()
 	if (err != noErr)
 		ERROR_LOG(AUDIO, "error uninitializing audiounit");
 
-	err = CloseComponent(audioUnit);
+	err = AudioComponentInstanceDispose(audioUnit);
 	if (err != noErr)
 		ERROR_LOG(AUDIO, "error closing audio component");
 }

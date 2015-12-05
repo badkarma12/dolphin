@@ -1,15 +1,16 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Common/StringUtil.h"
+
+#include "Core/ConfigManager.h"
 
 #include "VideoBackends/Software/BPMemLoader.h"
 #include "VideoBackends/Software/DebugUtil.h"
 #include "VideoBackends/Software/EfbInterface.h"
-#include "VideoBackends/Software/HwRasterizer.h"
 #include "VideoBackends/Software/SWCommandProcessor.h"
 #include "VideoBackends/Software/SWRenderer.h"
 #include "VideoBackends/Software/SWStatistics.h"
@@ -22,8 +23,6 @@
 
 namespace DebugUtil
 {
-
-static bool drawingHwTriangles = false;
 
 static const int NUM_OBJECT_BUFFERS = 40;
 
@@ -205,12 +204,6 @@ void OnObjectBegin()
 	{
 		if (g_SWVideoConfig.bDumpTextures && swstats.thisFrame.numDrawnObjects >= g_SWVideoConfig.drawStart && swstats.thisFrame.numDrawnObjects < g_SWVideoConfig.drawEnd)
 			DumpActiveTextures();
-
-		if (g_SWVideoConfig.bHwRasterizer)
-		{
-			HwRasterizer::BeginTriangles();
-			drawingHwTriangles = true;
-		}
 	}
 }
 
@@ -222,12 +215,6 @@ void OnObjectEnd()
 			DumpEfb(StringFromFormat("%sobject%i.png",
 						File::GetUserPath(D_DUMPFRAMES_IDX).c_str(),
 						swstats.thisFrame.numDrawnObjects));
-
-		if (g_SWVideoConfig.bHwRasterizer || drawingHwTriangles)
-		{
-			HwRasterizer::EndTriangles();
-			drawingHwTriangles = false;
-		}
 
 		for (int i = 0; i < NUM_OBJECT_BUFFERS; i++)
 		{
@@ -253,7 +240,7 @@ void OnFrameEnd(u32 width, u32 height)
 {
 	if (!g_bSkipCurrentFrame)
 	{
-		if (g_SWVideoConfig.bDumpFrames)
+		if (SConfig::GetInstance().m_DumpFrames)
 		{
 			DumpColorTexture(StringFromFormat("%sframe%i_color.png",
 					File::GetUserPath(D_DUMPFRAMES_IDX).c_str(), swstats.frameCount), width, height);

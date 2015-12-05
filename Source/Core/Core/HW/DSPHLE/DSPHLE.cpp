@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <iostream>
@@ -20,24 +20,6 @@
 DSPHLE::DSPHLE()
 {
 }
-
-// Mailbox utility
-struct DSPState
-{
-	u32 CPUMailbox;
-	u32 DSPMailbox;
-
-	void Reset()
-	{
-		CPUMailbox = 0x00000000;
-		DSPMailbox = 0x00000000;
-	}
-
-	DSPState()
-	{
-		Reset();
-	}
-};
 
 bool DSPHLE::Initialize(bool bWii, bool bDSPThread)
 {
@@ -62,6 +44,8 @@ void DSPHLE::DSP_StopSoundStream()
 
 void DSPHLE::Shutdown()
 {
+	delete m_pUCode;
+	m_pUCode = nullptr;
 }
 
 void DSPHLE::DSP_Update(int cycles)
@@ -73,16 +57,14 @@ void DSPHLE::DSP_Update(int cycles)
 u32 DSPHLE::DSP_UpdateRate()
 {
 	// AX HLE uses 3ms (Wii) or 5ms (GC) timing period
-	int fields = VideoInterface::GetNumFields();
-	if (m_pUCode != nullptr)
-		return (SystemTimers::GetTicksPerSecond() / 1000) * m_pUCode->GetUpdateMs() / fields;
-	else
-		return SystemTimers::GetTicksPerSecond() / 1000;
+	// But to be sure, just update the HLE every ms.
+	return SystemTimers::GetTicksPerSecond() / 1000;
 }
 
 void DSPHLE::SendMailToDSP(u32 _uMail)
 {
-	if (m_pUCode != nullptr) {
+	if (m_pUCode != nullptr)
+	{
 		DEBUG_LOG(DSP_MAIL, "CPU writes 0x%08x", _uMail);
 		m_pUCode->HandleMail(_uMail);
 	}
@@ -184,7 +166,7 @@ void DSPHLE::DoState(PointerWrap &p)
 	m_MailHandler.DoState(p);
 }
 
-// Mailbox fuctions
+// Mailbox functions
 unsigned short DSPHLE::DSP_ReadMailBoxHigh(bool _CPUMailbox)
 {
 	if (_CPUMailbox)
@@ -236,7 +218,7 @@ void DSPHLE::DSP_WriteMailBoxLow(bool _CPUMailbox, unsigned short _Value)
 	}
 }
 
-// Other DSP fuctions
+// Other DSP functions
 u16 DSPHLE::DSP_WriteControlRegister(unsigned short _Value)
 {
 	DSP::UDSPControl Temp(_Value);

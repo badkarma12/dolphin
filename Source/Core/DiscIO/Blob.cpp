@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cstddef>
@@ -27,15 +27,15 @@ void SectorReader::SetSectorSize(int blocksize)
 {
 	for (int i = 0; i < CACHE_SIZE; i++)
 	{
-		cache[i] = new u8[blocksize];
-		cache_tags[i] = (u64)(s64) - 1;
+		m_cache[i] = new u8[blocksize];
+		m_cache_tags[i] = (u64)(s64) - 1;
 	}
 	m_blocksize = blocksize;
 }
 
 SectorReader::~SectorReader()
 {
-	for (u8*& block : cache)
+	for (u8*& block : m_cache)
 	{
 		delete [] block;
 	}
@@ -44,15 +44,15 @@ SectorReader::~SectorReader()
 const u8 *SectorReader::GetBlockData(u64 block_num)
 {
 	// TODO : Expand usage of the cache to more than one block :P
-	if (cache_tags[0] == block_num)
+	if (m_cache_tags[0] == block_num)
 	{
-		return cache[0];
+		return m_cache[0];
 	}
 	else
 	{
-		GetBlock(block_num, cache[0]);
-		cache_tags[0] = block_num;
-		return cache[0];
+		GetBlock(block_num, m_cache[0]);
+		m_cache_tags[0] = block_num;
+		return m_cache[0];
 	}
 }
 
@@ -77,23 +77,19 @@ bool SectorReader::Read(u64 offset, u64 size, u8* out_ptr)
 			continue;
 		}
 
+		const u8* data = GetBlockData(block);
+		if (!data)
+			return false;
+
 		u32 toCopy = m_blocksize - positionInBlock;
 		if (toCopy >= remain)
 		{
-			const u8* data = GetBlockData(block);
-			if (!data)
-				return false;
-
 			// Yay, we are done!
 			memcpy(out_ptr, data + positionInBlock, (size_t)remain);
 			return true;
 		}
 		else
 		{
-			const u8* data = GetBlockData(block);
-			if (!data)
-				return false;
-
 			memcpy(out_ptr, data + positionInBlock, toCopy);
 			out_ptr += toCopy;
 			remain -= toCopy;
@@ -129,7 +125,7 @@ IBlobReader* CreateBlobReader(const std::string& filename)
 	if (IsWbfsBlob(filename))
 		return WbfsFileReader::Create(filename);
 
-	if (IsCompressedBlob(filename))
+	if (IsGCZBlob(filename))
 		return CompressedBlobReader::Create(filename);
 
 	if (IsCISOBlob(filename))

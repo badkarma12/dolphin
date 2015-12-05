@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 //
 // Additional copyrights go to Duddie and Tratax (c) 2004
@@ -7,6 +7,8 @@
 #include "Core/DSP/DSPIntCCUtil.h"
 #include "Core/DSP/DSPInterpreter.h"
 #include "Core/DSP/DSPIntUtil.h"
+#include "Core/DSP/DSPMemoryMap.h"
+#include "Core/DSP/DSPTables.h"
 
 // Arithmetic and accumulator control.
 
@@ -370,7 +372,9 @@ void addr(const UDSPInstruction opc)
 
 	s64 acc = dsp_get_long_acc(dreg);
 	s64 ax = 0;
-	switch (sreg) {
+
+	switch (sreg)
+	{
 	case DSP_REG_AXL0:
 	case DSP_REG_AXL1:
 		ax = (s16)g_dsp.r.ax[sreg-DSP_REG_AXL0].l;
@@ -383,6 +387,7 @@ void addr(const UDSPInstruction opc)
 		ax = 0;
 		break;
 	}
+
 	ax <<= 16;
 	s64 res = acc + ax;
 
@@ -569,7 +574,9 @@ void subr(const UDSPInstruction opc)
 
 	s64 acc = dsp_get_long_acc(dreg);
 	s64 ax = 0;
-	switch (sreg) {
+
+	switch (sreg)
+	{
 	case DSP_REG_AXL0:
 	case DSP_REG_AXL1:
 		ax = (s16)g_dsp.r.ax[sreg-DSP_REG_AXL0].l;
@@ -582,6 +589,7 @@ void subr(const UDSPInstruction opc)
 		ax = 0;
 		break;
 	}
+
 	ax <<= 16;
 	s64 res = acc - ax;
 

@@ -1,19 +1,6 @@
-// Copyright (C) 2003 Dolphin Project.
-
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, version 2.0.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License 2.0 for more details.
-
-// A copy of the GPL 2.0 should have been included with the program.
-// If not, see http://www.gnu.org/licenses/
-
-// Official Git repository and contact information can be found at
-// http://code.google.com/p/dolphin-emu/
+// Copyright 2003 Dolphin Emulator Project
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
 
 /*
 Here is a nice ascii overview of audio flow affected by this file:
@@ -53,7 +40,7 @@ This file mainly deals with the [Drive I/F], however [AIDFR] controls
 #include "AudioCommon/AudioCommon.h"
 
 #include "Common/ChunkFile.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/MathUtil.h"
 
 #include "Core/CoreTiming.h"
@@ -146,7 +133,7 @@ void DoState(PointerWrap &p)
 static void GenerateAudioInterrupt();
 static void UpdateInterrupts();
 static void IncreaseSampleCount(const u32 _uAmount);
-static u64 GetAIPeriod();
+static int GetAIPeriod();
 static int et_AI;
 
 void Init()
@@ -197,7 +184,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 				DEBUG_LOG(AUDIO_INTERFACE, "Change AISFR to %s", tmpAICtrl.AISFR ? "48khz":"32khz");
 				m_Control.AISFR = tmpAICtrl.AISFR;
 				g_AISSampleRate = tmpAICtrl.AISFR ? 48000 : 32000;
-				soundStream->GetMixer()->SetStreamInputSampleRate(g_AISSampleRate);
+				g_sound_stream->GetMixer()->SetStreamInputSampleRate(g_AISSampleRate);
 				g_CPUCyclesPerSample = SystemTimers::GetTicksPerSecond() / g_AISSampleRate;
 			}
 			// Set frequency of DMA
@@ -206,7 +193,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 				DEBUG_LOG(AUDIO_INTERFACE, "Change AIDFR to %s", tmpAICtrl.AIDFR ? "32khz":"48khz");
 				m_Control.AIDFR = tmpAICtrl.AIDFR;
 				g_AIDSampleRate = tmpAICtrl.AIDFR ? 32000 : 48000;
-				soundStream->GetMixer()->SetDMAInputSampleRate(g_AIDSampleRate);
+				g_sound_stream->GetMixer()->SetDMAInputSampleRate(g_AIDSampleRate);
 			}
 
 
@@ -218,7 +205,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 				g_LastCPUTime = CoreTiming::GetTicks();
 
 				CoreTiming::RemoveEvent(et_AI);
-				CoreTiming::ScheduleEvent(((int)GetAIPeriod() / 2), et_AI);
+				CoreTiming::ScheduleEvent(GetAIPeriod(), et_AI);
 			}
 
 			// AI Interrupt
@@ -245,16 +232,20 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 		MMIO::DirectRead<u32>(&m_Volume.hex),
 		MMIO::ComplexWrite<u32>([](u32, u32 val) {
 			m_Volume.hex = val;
-			soundStream->GetMixer()->SetStreamingVolume(m_Volume.left, m_Volume.right);
+			g_sound_stream->GetMixer()->SetStreamingVolume(m_Volume.left, m_Volume.right);
 		})
 	);
 
 	mmio->Register(base | AI_SAMPLE_COUNTER,
 		MMIO::ComplexRead<u32>([](u32) {
-			Update(0, 0);
-			return m_SampleCounter;
+			return m_SampleCounter + static_cast<u32>((CoreTiming::GetTicks() - g_LastCPUTime) / g_CPUCyclesPerSample);
 		}),
-		MMIO::DirectWrite<u32>(&m_SampleCounter)
+		MMIO::ComplexWrite<u32>([](u32, u32 val) {
+			m_SampleCounter = val;
+			g_LastCPUTime = CoreTiming::GetTicks();
+			CoreTiming::RemoveEvent(et_AI);
+			CoreTiming::ScheduleEvent(GetAIPeriod(), et_AI);
+		})
 	);
 
 	mmio->Register(base | AI_INTERRUPT_TIMING,
@@ -263,7 +254,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 			DEBUG_LOG(AUDIO_INTERFACE, "AI_INTERRUPT_TIMING=%08x@%08x", val, PowerPC::ppcState.pc);
 			m_InterruptTiming = val;
 			CoreTiming::RemoveEvent(et_AI);
-			CoreTiming::ScheduleEvent(((int)GetAIPeriod() / 2), et_AI);
+			CoreTiming::ScheduleEvent(GetAIPeriod(), et_AI);
 		})
 	);
 }
@@ -321,16 +312,17 @@ void Update(u64 userdata, int cyclesLate)
 			g_LastCPUTime += Samples * g_CPUCyclesPerSample;
 			IncreaseSampleCount(Samples);
 		}
-		CoreTiming::ScheduleEvent(((int)GetAIPeriod() / 2) - cyclesLate, et_AI);
+		CoreTiming::ScheduleEvent(GetAIPeriod() - cyclesLate, et_AI);
 	}
 }
 
-u64 GetAIPeriod()
+int GetAIPeriod()
 {
-	u64 period = g_CPUCyclesPerSample * m_InterruptTiming;
+	u64 period = g_CPUCyclesPerSample * (m_InterruptTiming-m_SampleCounter);
+	u64 s_period = g_CPUCyclesPerSample * g_AISSampleRate;
 	if (period == 0)
-		period = 32000 * g_CPUCyclesPerSample;
-	return period;
+		return static_cast<int>(s_period);
+	return static_cast<int>(std::min(period, s_period));
 }
 
 } // end of namespace AudioInterface

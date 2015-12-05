@@ -1,19 +1,19 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <algorithm>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "VideoBackends/Software/BPMemLoader.h"
 #include "VideoBackends/Software/EfbInterface.h"
-#include "VideoBackends/Software/HwRasterizer.h"
 #include "VideoBackends/Software/NativeVertexFormat.h"
 #include "VideoBackends/Software/Rasterizer.h"
 #include "VideoBackends/Software/SWStatistics.h"
 #include "VideoBackends/Software/SWVideoConfig.h"
 #include "VideoBackends/Software/Tev.h"
 #include "VideoBackends/Software/XFMemLoader.h"
+#include "VideoCommon/BoundingBox.h"
 
 
 #define BLOCK_SIZE 2
@@ -126,9 +126,7 @@ inline void Draw(s32 x, s32 y, s32 xi, s32 yi)
 	float dx = vertexOffsetX + (float)(x - vertex0X);
 	float dy = vertexOffsetY + (float)(y - vertex0Y);
 
-	s32 z = (s32)ZSlope.GetValue(dx, dy);
-	if (z < 0 || z > 0x00ffffff)
-		return;
+	s32 z = (s32)MathUtil::Clamp<float>(ZSlope.GetValue(dx, dy), 0.0f, 16777215.0f);
 
 	if (bpmem.UseEarlyDepthTest() && g_SWVideoConfig.bZComploc)
 	{
@@ -210,7 +208,7 @@ static void InitSlope(Slope *slope, float f1, float f2, float f3, float DX31, fl
 	slope->f0 = f1;
 }
 
-static inline void CalculateLOD(s32 &lod, bool &linear, u32 texmap, u32 texcoord)
+static inline void CalculateLOD(s32* lodp, bool* linear, u32 texmap, u32 texcoord)
 {
 	FourTexUnits& texUnit = bpmem.tex[(texmap >> 2) & 1];
 	u8 subTexmap = texmap & 3;
@@ -240,20 +238,21 @@ static inline void CalculateLOD(s32 &lod, bool &linear, u32 texmap, u32 texcoord
 	}
 
 	// get LOD in s28.4
-	lod = FixedLog2(std::max(sDelta, tDelta));
+	s32 lod = FixedLog2(std::max(sDelta, tDelta));
 
 	// bias is s2.5
 	int bias = tm0.lod_bias;
 	bias >>= 1;
 	lod += bias;
 
-	linear = ((lod > 0 && (tm0.min_filter & 4)) || (lod <= 0 && tm0.mag_filter));
+	*linear = ((lod > 0 && (tm0.min_filter & 4)) || (lod <= 0 && tm0.mag_filter));
 
 	// order of checks matters
 	// should be:
 	// if lod > max then max
 	// else if lod < min then min
 	lod = CLAMP(lod, (s32)tm1.min_lod, (s32)tm1.max_lod);
+	*lodp = lod;
 }
 
 static void BuildBlock(s32 blockX, s32 blockY)
@@ -295,7 +294,7 @@ static void BuildBlock(s32 blockX, s32 blockY)
 		u32 texcoord = indref & 3;
 		indref >>= 3;
 
-		CalculateLOD(rasterBlock.IndirectLod[i], rasterBlock.IndirectLinear[i], texmap, texcoord);
+		CalculateLOD(&rasterBlock.IndirectLod[i], &rasterBlock.IndirectLinear[i], texmap, texcoord);
 	}
 
 	for (unsigned int i = 0; i <= bpmem.genMode.numtevstages; i++)
@@ -307,7 +306,7 @@ static void BuildBlock(s32 blockX, s32 blockY)
 			u32 texmap = order.getTexMap(stageOdd);
 			u32 texcoord = order.getTexCoord(stageOdd);
 
-			CalculateLOD(rasterBlock.TextureLod[i], rasterBlock.TextureLinear[i], texmap, texcoord);
+			CalculateLOD(&rasterBlock.TextureLod[i], &rasterBlock.TextureLinear[i], texmap, texcoord);
 		}
 	}
 }
@@ -315,12 +314,6 @@ static void BuildBlock(s32 blockX, s32 blockY)
 void DrawTriangleFrontFace(OutputVertexData *v0, OutputVertexData *v1, OutputVertexData *v2)
 {
 	INCSTAT(swstats.thisFrame.numTrianglesDrawn);
-
-	if (g_SWVideoConfig.bHwRasterizer)
-	{
-		HwRasterizer::DrawTriangleFrontFace(v0, v1, v2);
-		return;
-	}
 
 	// adapted from http://devmaster.net/posts/6145/advanced-rasterization
 
@@ -344,13 +337,13 @@ void DrawTriangleFrontFace(OutputVertexData *v0, OutputVertexData *v1, OutputVer
 	const s32 DY31 = Y3 - Y1;
 
 	// Fixed-pos32 deltas
-	const s32 FDX12 = DX12 << 4;
-	const s32 FDX23 = DX23 << 4;
-	const s32 FDX31 = DX31 << 4;
+	const s32 FDX12 = DX12 * 16;
+	const s32 FDX23 = DX23 * 16;
+	const s32 FDX31 = DX31 * 16;
 
-	const s32 FDY12 = DY12 << 4;
-	const s32 FDY23 = DY23 << 4;
-	const s32 FDY31 = DY31 << 4;
+	const s32 FDY12 = DY12 * 16;
+	const s32 FDY23 = DY23 * 16;
+	const s32 FDY31 = DY31 * 16;
 
 	// Bounding rectangle
 	s32 minx = (std::min(std::min(X1, X2), X3) + 0xF) >> 4;
@@ -399,10 +392,6 @@ void DrawTriangleFrontFace(OutputVertexData *v0, OutputVertexData *v1, OutputVer
 			InitSlope(&TexSlopes[i][comp], v0->texCoords[i][comp] * w[0], v1->texCoords[i][comp] * w[1], v2->texCoords[i][comp] * w[2], fltdx31, fltdx12, fltdy12, fltdy31);
 	}
 
-	// Start in corner of 8x8 block
-	minx &= ~(BLOCK_SIZE - 1);
-	miny &= ~(BLOCK_SIZE - 1);
-
 	// Half-edge constants
 	s32 C1 = DY12 * X1 - DX12 * Y1;
 	s32 C2 = DY23 * X2 - DX23 * Y2;
@@ -412,6 +401,10 @@ void DrawTriangleFrontFace(OutputVertexData *v0, OutputVertexData *v1, OutputVer
 	if (DY12 < 0 || (DY12 == 0 && DX12 > 0)) C1++;
 	if (DY23 < 0 || (DY23 == 0 && DX23 > 0)) C2++;
 	if (DY31 < 0 || (DY31 == 0 && DX31 > 0)) C3++;
+
+	// Start in corner of 8x8 block
+	minx &= ~(BLOCK_SIZE - 1);
+	miny &= ~(BLOCK_SIZE - 1);
 
 	// Loop through blocks
 	for (s32 y = miny; y < maxy; y += BLOCK_SIZE)

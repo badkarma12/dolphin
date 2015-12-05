@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -16,6 +16,20 @@ namespace DiscIO
 
 class WbfsFileReader : public IBlobReader
 {
+public:
+	static WbfsFileReader* Create(const std::string& filename);
+
+	BlobType GetBlobType() const override { return BlobType::WBFS; }
+
+	// The WBFS format does not save the original file size.
+	// This function returns a constant upper bound
+	// (the size of a double-layer Wii disc).
+	u64 GetDataSize() const override;
+
+	u64 GetRawSize() const override { return m_size; }
+	bool Read(u64 offset, u64 nbytes, u8* out_ptr) override;
+
+private:
 	WbfsFileReader(const std::string& filename);
 	~WbfsFileReader();
 
@@ -38,28 +52,27 @@ class WbfsFileReader : public IBlobReader
 	u32 m_total_files;
 	u64 m_size;
 
-	u64 hd_sector_size;
-	u8 hd_sector_shift;
-	u32 hd_sector_count;
-
-	u64 wbfs_sector_size;
-	u8 wbfs_sector_shift;
-	u64 wbfs_sector_count;
+	u64 m_hd_sector_size;
+	u64 m_wbfs_sector_size;
+	u64 m_wbfs_sector_count;
 	u64 m_disc_info_size;
 
-	u8 disc_table[500];
+#pragma pack(1)
+	struct WbfsHeader
+	{
+		char magic[4];
+		u32 hd_sector_count;
+		u8 hd_sector_shift;
+		u8 wbfs_sector_shift;
+		u8 padding[2];
+		u8 disc_table[500];
+	} m_header;
+#pragma pack()
 
 	u16* m_wlba_table;
 	u64 m_blocks_per_disc;
 
 	bool m_good;
-
-public:
-	static WbfsFileReader* Create(const std::string& filename);
-
-	u64 GetDataSize() const override { return m_size; }
-	u64 GetRawSize() const override { return m_size; }
-	bool Read(u64 offset, u64 nbytes, u8* out_ptr) override;
 };
 
 bool IsWbfsBlob(const std::string& filename);

@@ -1,41 +1,7 @@
-/*====================================================================
-
-$Id: assemble.cpp,v 1.3 2008-11-11 01:04:26 wntrmute Exp $
-
-project:      GameCube DSP Tool (gcdsp)
-mail:         duddie@walla.com
-
-Copyright (c) 2005 Duddie
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-
-Revision 1.4  2008/10/04 10:30:00  Hermes
-added function to export the code to .h file
-added support for '/ *' '* /' and '//' for comentaries
-added some sintax detection when use registers
-
-$Log: not supported by cvs2svn $
-Revision 1.2  2005/09/14 02:19:29  wntrmute
-added header guards
-use standard main function
-
-Revision 1.1  2005/08/24 22:13:34  wntrmute
-Initial import
-
-
-====================================================================*/
+// Copyright 2009 Dolphin Emulator Project
+// Copyright 2005 Duddie, wntrmute, Hermes
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
 
 #include <cstdio>
 #include <cstdlib>
@@ -44,7 +10,7 @@ Initial import
 #include <map>
 #include <string>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 
 #include "Core/DSP/DSPAssembler.h"
@@ -539,7 +505,9 @@ bool DSPAssembler::VerifyParams(const opc_t *opc, param_t *par, int count, bool 
 					if ((int)par[i].val < value ||
 						(int)par[i].val > value + get_mask_shifted_down(opc->params[i].mask))
 					{
-						if (ext) fprintf(stderr, "(ext) ");
+						if (ext)
+							fprintf(stderr, "(ext) ");
+
 						fprintf(stderr, "%s   (param %i)", cur_line.c_str(), current_param);
 						ShowError(ERR_INVALID_REGISTER);
 					}
@@ -547,7 +515,9 @@ bool DSPAssembler::VerifyParams(const opc_t *opc, param_t *par, int count, bool 
 				case P_PRG:
 					if ((int)par[i].val < 0 || (int)par[i].val > 0x3)
 					{
-						if (ext) fprintf(stderr, "(ext) ");
+						if (ext)
+							fprintf(stderr, "(ext) ");
+
 						fprintf(stderr, "%s   (param %i)", cur_line.c_str(), current_param);
 						ShowError(ERR_INVALID_REGISTER);
 					}
@@ -555,52 +525,71 @@ bool DSPAssembler::VerifyParams(const opc_t *opc, param_t *par, int count, bool 
 				case P_ACC:
 					if ((int)par[i].val < 0x20 || (int)par[i].val > 0x21)
 					{
-						if (ext) fprintf(stderr, "(ext) ");
-						if (par[i].val >= 0x1e && par[i].val <= 0x1f) {
+						if (ext)
+							fprintf(stderr, "(ext) ");
+
+						if (par[i].val >= 0x1e && par[i].val <= 0x1f)
+						{
 							fprintf(stderr, "%i : %s ", code_line, cur_line.c_str());
 							fprintf(stderr, "WARNING: $ACM%d register used instead of $ACC%d register Line: %d Param: %d Ext: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param, ext);
 						}
-						else if (par[i].val >= 0x1c && par[i].val <= 0x1d) {
+						else if (par[i].val >= 0x1c && par[i].val <= 0x1d)
+						{
 							fprintf(stderr, "WARNING: $ACL%d register used instead of $ACC%d register Line: %d Param: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param);
 						}
 						else
+						{
 							ShowError(ERR_WRONG_PARAMETER_ACC);
+						}
 					}
 					break;
 				case P_ACCM:
 					if ((int)par[i].val < 0x1e || (int)par[i].val > 0x1f)
 					{
-						if (ext) fprintf(stderr, "(ext) ");
+						if (ext)
+							fprintf(stderr, "(ext) ");
+
 						if (par[i].val >= 0x1c && par[i].val <= 0x1d)
+						{
 							fprintf(stderr, "WARNING: $ACL%d register used instead of $ACM%d register Line: %d Param: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param);
+						}
 						else if (par[i].val >= 0x20 && par[i].val <= 0x21)
+						{
 							fprintf(stderr, "WARNING: $ACC%d register used instead of $ACM%d register Line: %d Param: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param);
+						}
 						else
+						{
 							ShowError(ERR_WRONG_PARAMETER_ACC);
+						}
 					}
 					break;
 
 				case P_ACCL:
 					if ((int)par[i].val < 0x1c || (int)par[i].val > 0x1d)
 					{
-						if (ext) fprintf(stderr, "(ext) ");
+						if (ext)
+							fprintf(stderr, "(ext) ");
+
 						if (par[i].val >= 0x1e && par[i].val <= 0x1f)
 						{
 							fprintf(stderr, "%s ", cur_line.c_str());
 							fprintf(stderr, "WARNING: $ACM%d register used instead of $ACL%d register Line: %d Param: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param);
 						}
-						else if (par[i].val >= 0x20 && par[i].val <= 0x21) {
+						else if (par[i].val >= 0x20 && par[i].val <= 0x21)
+						{
 							fprintf(stderr, "%s ", cur_line.c_str());
 							fprintf(stderr, "WARNING: $ACC%d register used instead of $ACL%d register Line: %d Param: %d\n",
 								(par[i].val & 1), (par[i].val & 1), code_line, current_param);
 						}
 						else
+						{
 							ShowError(ERR_WRONG_PARAMETER_ACC);
+						}
 					}
 					break;
 /*				case P_ACCM_D: //P_ACC_MID:
@@ -857,9 +846,8 @@ bool DSPAssembler::AssembleFile(const char *fname, int pass)
 			}
 		}
 
-		char *opcode = nullptr;
-		opcode = strtok(ptr, " ");
-		char *opcode_ext = nullptr;
+		char* opcode = strtok(ptr, " ");
+		char* opcode_ext = nullptr;
 
 		u32 params_count = 0;
 		u32 params_count_ext = 0;

@@ -1,5 +1,5 @@
 // Copyright 2014 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 /*
@@ -12,10 +12,13 @@
 
 #pragma once
 
+#include <atomic>
+
 typedef LONG* LPLONG; // Missing type for ForceFeedback.h
 #include <CoreFoundation/CoreFoundation.h>
 #include <ForceFeedback/ForceFeedback.h>
 #include "DirectInputConstants.h" // Not stricty necessary
+#include "Common/CommonTypes.h" // for LONG
 
 namespace ciface
 {

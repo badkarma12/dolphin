@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -45,15 +45,14 @@ namespace DX11 {
 
 struct XFBSource : public XFBSourceBase
 {
-	XFBSource(D3DTexture2D *_tex) : tex(_tex) {}
+	XFBSource(D3DTexture2D *_tex, int slices) : tex(_tex), m_slices(slices) {}
 	~XFBSource() { tex->Release(); }
 
-	void Draw(const MathUtil::Rectangle<int> &sourcerc,
-		const MathUtil::Rectangle<float> &drawrc) const override;
 	void DecodeToTexture(u32 xfbAddr, u32 fbWidth, u32 fbHeight) override;
 	void CopyEFB(float Gamma) override;
 
 	D3DTexture2D* const tex;
+	const int m_slices;
 };
 
 class FramebufferManager : public FramebufferManagerBase
@@ -81,10 +80,10 @@ public:
 	}
 
 private:
-	XFBSourceBase* CreateXFBSource(unsigned int target_width, unsigned int target_height) override;
-	void GetTargetSize(unsigned int *width, unsigned int *height, const EFBRectangle& sourceRc) override;
+	XFBSourceBase* CreateXFBSource(unsigned int target_width, unsigned int target_height, unsigned int layers) override;
+	void GetTargetSize(unsigned int *width, unsigned int *height) override;
 
-	void CopyToRealXFB(u32 xfbAddr, u32 fbWidth, u32 fbHeight, const EFBRectangle& sourceRc,float Gamma) override;
+	void CopyToRealXFB(u32 xfbAddr, u32 fbStride, u32 fbHeight, const EFBRectangle& sourceRc,float Gamma) override;
 
 	static struct Efb
 	{
@@ -99,7 +98,12 @@ private:
 
 		D3DTexture2D* resolved_color_tex;
 		D3DTexture2D* resolved_depth_tex;
+
+		int slices;
 	} m_efb;
+
+	static unsigned int m_target_width;
+	static unsigned int m_target_height;
 };
 
 }  // namespace DX11

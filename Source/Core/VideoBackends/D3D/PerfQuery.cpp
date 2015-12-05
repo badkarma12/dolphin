@@ -1,3 +1,7 @@
+// Copyright 2012 Dolphin Emulator Project
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
+
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/PerfQuery.h"
 #include "VideoCommon/RenderBase.h"
@@ -6,7 +10,6 @@ namespace DX11 {
 
 PerfQuery::PerfQuery()
 	: m_query_read_pos()
-	, m_query_count()
 {
 	for (ActiveQuery& entry : m_query_buffer)
 	{
@@ -72,21 +75,13 @@ u32 PerfQuery::GetQueryResult(PerfQueryType type)
 	u32 result = 0;
 
 	if (type == PQ_ZCOMP_INPUT_ZCOMPLOC || type == PQ_ZCOMP_OUTPUT_ZCOMPLOC)
-	{
 		result = m_results[PQG_ZCOMP_ZCOMPLOC];
-	}
 	else if (type == PQ_ZCOMP_INPUT || type == PQ_ZCOMP_OUTPUT)
-	{
 		result = m_results[PQG_ZCOMP];
-	}
 	else if (type == PQ_BLEND_INPUT)
-	{
 		result = m_results[PQG_ZCOMP] + m_results[PQG_ZCOMP_ZCOMPLOC];
-	}
 	else if (type == PQ_EFB_COPY_CLOCKS)
-	{
 		result = m_results[PQG_EFB_COPY_CLOCKS];
-	}
 
 	return result / 4;
 }

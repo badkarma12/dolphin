@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -33,8 +33,6 @@ public:
 	u8* GetTMD() const { return m_pTMD; }
 	u8* GetDataApp() const { return m_pDataApp; }
 	u8* GetFooter() const { return m_pFooter; }
-
-	static bool IsWiiWAD(const std::string& _rName);
 
 private:
 

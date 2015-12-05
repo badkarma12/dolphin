@@ -1,8 +1,8 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -94,7 +94,7 @@ void PatchFunctions()
 		}
 	}
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bEnableDebugging)
+	if (SConfig::GetInstance().bEnableDebugging)
 	{
 		for (size_t i = 1; i < sizeof(OSBreakPoints) / sizeof(SPatch); i++)
 		{
@@ -143,10 +143,7 @@ int GetFunctionFlagsByIndex(u32 index)
 
 bool IsEnabled(int flags)
 {
-	if (flags == HLE::HLE_TYPE_MEMORY && Core::g_CoreStartupParameter.bMMU)
-		return false;
-
-	if (flags == HLE::HLE_TYPE_DEBUG && !Core::g_CoreStartupParameter.bEnableDebugging && PowerPC::GetMode() != MODE_INTERPRETER)
+	if (flags == HLE::HLE_TYPE_DEBUG && !SConfig::GetInstance().bEnableDebugging && PowerPC::GetMode() != MODE_INTERPRETER)
 		return false;
 
 	return true;

@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2014 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -7,7 +7,8 @@
 #include <functional>
 #include <memory>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
+#include "Common/NonCopyable.h"
 
 // All the templated and very repetitive MMIO-related code is isolated in this
 // file for easier reading. It mostly contains code related to handling methods
@@ -216,12 +217,14 @@ private:
 	MaybeExtern template ReadHandlingMethod<u8>* ReadToLarger(Mapping* mmio, u32 larger_addr, u32 shift); \
 	MaybeExtern template ReadHandlingMethod<u16>* ReadToLarger(Mapping* mmio, u32 larger_addr, u32 shift)
 
-#define MMIO_PUBLIC_SPECIALIZATIONS(MaybeExtern) \
+#define MMIO_PUBLIC_SPECIALIZATIONS() \
 	MMIO_GENERIC_PUBLIC_SPECIALIZATIONS(MaybeExtern, u8); \
 	MMIO_GENERIC_PUBLIC_SPECIALIZATIONS(MaybeExtern, u16); \
 	MMIO_GENERIC_PUBLIC_SPECIALIZATIONS(MaybeExtern, u32); \
 	MMIO_SPECIAL_PUBLIC_SPECIALIZATIONS(MaybeExtern);
 
-MMIO_PUBLIC_SPECIALIZATIONS(extern)
+#define MaybeExtern extern
+MMIO_PUBLIC_SPECIALIZATIONS()
+#undef MaybeExtern
 
 }

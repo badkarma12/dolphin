@@ -1,12 +1,14 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
+#include "Common/Logging/Log.h"
 
 #if HAVE_PORTAUDIO
 
 #include "Core/CoreTiming.h"
+#include "Core/HW/EXI.h"
 #include "Core/HW/EXI_Device.h"
 #include "Core/HW/EXI_DeviceMic.h"
 #include "Core/HW/GCPad.h"
@@ -161,7 +163,7 @@ CEXIMic::~CEXIMic()
 	StreamTerminate();
 }
 
-bool CEXIMic::IsPresent()
+bool CEXIMic::IsPresent() const
 {
 	return true;
 }
@@ -176,8 +178,9 @@ void CEXIMic::SetCS(int cs)
 
 void CEXIMic::UpdateNextInterruptTicks()
 {
-	next_int_ticks = CoreTiming::GetTicks() +
-		(SystemTimers::GetTicksPerSecond() / sample_rate) * buff_size_samples;
+	int diff = (SystemTimers::GetTicksPerSecond() / sample_rate) * buff_size_samples;
+	next_int_ticks = CoreTiming::GetTicks() + diff;
+	ExpansionInterface::ScheduleUpdateInterrupts(diff);
 }
 
 bool CEXIMic::IsInterruptSet()

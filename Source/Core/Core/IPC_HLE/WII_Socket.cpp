@@ -1,11 +1,14 @@
 // Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
-#include "Core/Movie.h"
-#include "Core/NetPlayProto.h"
+#include "Common/FileUtil.h"
+#include "Core/Core.h"
 #include "Core/IPC_HLE/WII_IPC_HLE.h"
 #include "Core/IPC_HLE/WII_IPC_HLE_Device.h"
 #include "Core/IPC_HLE/WII_Socket.h" // No Wii socket support while using NetPlay or TAS
@@ -21,13 +24,14 @@
 char* WiiSockMan::DecodeError(s32 ErrorCode)
 {
 #ifdef _WIN32
+	// NOT THREAD SAFE
 	static char Message[1024];
-	// If this program was multi-threaded, we'd want to use FORMAT_MESSAGE_ALLOCATE_BUFFER
-	// instead of a static buffer here.
-	// (And of course, free the buffer when we were done with it)
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS |
-		FORMAT_MESSAGE_MAX_WIDTH_MASK, nullptr, ErrorCode,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)Message, 1024, nullptr);
+
+	FormatMessageA(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
+		nullptr, ErrorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), Message,
+		sizeof(Message), nullptr);
+
 	return Message;
 #else
 	return strerror(ErrorCode);
@@ -64,9 +68,12 @@ static s32 TranslateErrorCode(s32 native_error, bool isRW)
 	case ERRORCODE(EHOSTUNREACH):
 		return -SO_EHOSTUNREACH;
 	case EITHER(WSAEWOULDBLOCK, EAGAIN):
-		if (isRW){
+		if (isRW)
+		{
 			return -SO_EAGAIN;  // EAGAIN
-		}else{
+		}
+		else
+		{
 			return -SO_EINPROGRESS; // EINPROGRESS
 		}
 	default:
@@ -74,7 +81,8 @@ static s32 TranslateErrorCode(s32 native_error, bool isRW)
 	}
 }
 
-s32 WiiSockMan::GetNetErrorCode(s32 ret, std::string caller, bool isRW)
+// Don't use string! (see https://github.com/dolphin-emu/dolphin/pull/3143)
+s32 WiiSockMan::GetNetErrorCode(s32 ret, const char* caller, bool isRW)
 {
 #ifdef _WIN32
 	s32 errorCode = WSAGetLastError();
@@ -89,7 +97,7 @@ s32 WiiSockMan::GetNetErrorCode(s32 ret, std::string caller, bool isRW)
 	}
 
 	INFO_LOG(WII_IPC_NET, "%s failed with error %d: %s, ret= %d",
-		caller.c_str(), errorCode, DecodeError(errorCode), ret);
+		caller, errorCode, DecodeError(errorCode), ret);
 
 	s32 ReturnValue = TranslateErrorCode(errorCode, isRW);
 	WiiSockMan::GetInstance().SetLastNetError(ReturnValue);
@@ -238,7 +246,7 @@ void WiiSocket::Update(bool read, bool write, bool except)
 				}
 				else
 				{
-					int ret = (s32)accept(fd, nullptr, 0);
+					int ret = (s32)accept(fd, nullptr, nullptr);
 					ReturnValue = WiiSockMan::GetNetErrorCode(ret, "SO_ACCEPT", true);
 				}
 
@@ -306,18 +314,18 @@ void WiiSocket::Update(bool read, bool write, bool except)
 					case IOCTLV_NET_SSL_DOHANDSHAKE:
 					{
 
-						int ret = ssl_handshake(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx);
+						int ret = mbedtls_ssl_handshake(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx);
 						switch (ret)
 						{
 						case 0:
 							Memory::Write_U32(SSL_OK, BufferIn);
 							break;
-						case POLARSSL_ERR_NET_WANT_READ:
+						case MBEDTLS_ERR_SSL_WANT_READ:
 							Memory::Write_U32(SSL_ERR_RAGAIN, BufferIn);
 							if (!nonBlock)
 								ReturnValue = SSL_ERR_RAGAIN;
 							break;
-						case POLARSSL_ERR_NET_WANT_WRITE:
+						case MBEDTLS_ERR_SSL_WANT_WRITE:
 							Memory::Write_U32(SSL_ERR_WAGAIN, BufferIn);
 							if (!nonBlock)
 								ReturnValue = SSL_ERR_WAGAIN;
@@ -337,7 +345,7 @@ void WiiSocket::Update(bool read, bool write, bool except)
 					}
 					case IOCTLV_NET_SSL_WRITE:
 					{
-						int ret = ssl_write(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx, Memory::GetPointer(BufferOut2), BufferOutSize2);
+						int ret = mbedtls_ssl_write(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx, Memory::GetPointer(BufferOut2), BufferOutSize2);
 
 #ifdef DEBUG_SSL
 						File::IOFile("ssl_write.bin", "ab").WriteBytes(Memory::GetPointer(BufferOut2), BufferOutSize2);
@@ -351,12 +359,12 @@ void WiiSocket::Update(bool read, bool write, bool except)
 						{
 							switch (ret)
 							{
-							case POLARSSL_ERR_NET_WANT_READ:
+							case MBEDTLS_ERR_SSL_WANT_READ:
 								Memory::Write_U32(SSL_ERR_RAGAIN, BufferIn);
 								if (!nonBlock)
 									ReturnValue = SSL_ERR_RAGAIN;
 								break;
-							case POLARSSL_ERR_NET_WANT_WRITE:
+							case MBEDTLS_ERR_SSL_WANT_WRITE:
 								Memory::Write_U32(SSL_ERR_WAGAIN, BufferIn);
 								if (!nonBlock)
 									ReturnValue = SSL_ERR_WAGAIN;
@@ -370,7 +378,7 @@ void WiiSocket::Update(bool read, bool write, bool except)
 					}
 					case IOCTLV_NET_SSL_READ:
 					{
-						int ret = ssl_read(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx, Memory::GetPointer(BufferIn2), BufferInSize2);
+						int ret = mbedtls_ssl_read(&CWII_IPC_HLE_Device_net_ssl::_SSL[sslID].ctx, Memory::GetPointer(BufferIn2), BufferInSize2);
 #ifdef DEBUG_SSL
 						if (ret > 0)
 						{
@@ -386,12 +394,12 @@ void WiiSocket::Update(bool read, bool write, bool except)
 						{
 							switch (ret)
 							{
-							case POLARSSL_ERR_NET_WANT_READ:
+							case MBEDTLS_ERR_SSL_WANT_READ:
 								Memory::Write_U32(SSL_ERR_RAGAIN, BufferIn);
 								if (!nonBlock)
 									ReturnValue = SSL_ERR_RAGAIN;
 								break;
-							case POLARSSL_ERR_NET_WANT_WRITE:
+							case MBEDTLS_ERR_SSL_WANT_WRITE:
 								Memory::Write_U32(SSL_ERR_WAGAIN, BufferIn);
 								if (!nonBlock)
 									ReturnValue = SSL_ERR_WAGAIN;
@@ -421,7 +429,9 @@ void WiiSocket::Update(bool read, bool write, bool except)
 
 					u32 flags = Memory::Read_U32(BufferIn2 + 0x04);
 					u32 has_destaddr = Memory::Read_U32(BufferIn2 + 0x08);
-					char * data = (char*)Memory::GetPointer(BufferIn);
+
+                                        // Not a string, Windows requires a const char* for sendto
+					const char* data = (const char*)Memory::GetPointer(BufferIn);
 
 					// Act as non blocking when SO_MSG_NONBLOCK is specified
 					forceNonBlock = ((flags & SO_MSG_NONBLOCK) == SO_MSG_NONBLOCK);
@@ -455,7 +465,8 @@ void WiiSocket::Update(bool read, bool write, bool except)
 				case IOCTLV_SO_RECVFROM:
 				{
 					u32 flags = Memory::Read_U32(BufferIn + 0x04);
-					char * data = (char *)Memory::GetPointer(BufferOut);
+					// Not a string, Windows requires a char* for recvfrom
+					char* data = (char*)Memory::GetPointer(BufferOut);
 					int data_len = BufferOutSize;
 
 					sockaddr_in local_name;
@@ -473,7 +484,8 @@ void WiiSocket::Update(bool read, bool write, bool except)
 					// recv/recvfrom only handles PEEK/OOB
 					flags &= SO_MSG_PEEK | SO_MSG_OOB;
 #ifdef _WIN32
-					if (flags & SO_MSG_PEEK){
+					if (flags & SO_MSG_PEEK)
+					{
 						unsigned long totallen = 0;
 						ioctlsocket(fd, FIONREAD, &totallen);
 						ReturnValue = totallen;
@@ -555,13 +567,6 @@ void WiiSockMan::AddSocket(s32 fd)
 
 s32 WiiSockMan::NewSocket(s32 af, s32 type, s32 protocol)
 {
-	if (NetPlay::IsNetPlayRunning() ||
-	    Movie::IsRecordingInput() ||
-	    Movie::IsPlayingInput())
-	{
-		return SO_ENOMEM;
-	}
-
 	s32 fd = (s32)socket(af, type, protocol);
 	s32 ret = GetNetErrorCode(fd, "NewSocket", false);
 	AddSocket(ret);
@@ -658,6 +663,13 @@ void WiiSockMan::Convert(sockaddr_in const & from, WiiSockAddrIn& to, s32 addrle
 		to.len = sizeof(WiiSockAddrIn);
 	else
 		to.len = addrlen;
+}
+
+void WiiSockMan::UpdateWantDeterminism(bool want)
+{
+	// If we switched into movie recording, kill existing sockets.
+	if (want)
+		Clean();
 }
 
 #undef ERRORCODE

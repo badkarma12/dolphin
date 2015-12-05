@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -20,11 +20,13 @@ struct TBreakPoint
 
 struct TMemCheck
 {
-	TMemCheck() {
+	TMemCheck()
+	{
 		numHits = 0;
 		StartAddress = EndAddress = 0;
 		bRange = OnRead = OnWrite = Log = Break = false;
 	}
+
 	u32 StartAddress;
 	u32 EndAddress;
 
@@ -38,8 +40,16 @@ struct TMemCheck
 
 	u32 numHits;
 
-	void Action(DebugInterface *dbg_interface, u32 _iValue, u32 addr,
+	// returns whether to break
+	bool Action(DebugInterface *dbg_interface, u32 _iValue, u32 addr,
 	            bool write, int size, u32 pc);
+};
+
+struct TWatch
+{
+	std::string name = "";
+	u32  iAddress;
+	bool bOn;
 };
 
 // Code breakpoints.
@@ -55,22 +65,20 @@ public:
 	void AddFromStrings(const TBreakPointsStr& bps);
 
 	// is address breakpoint
-	bool IsAddressBreakPoint(u32 _iAddress);
-	bool IsTempBreakPoint(u32 _iAddress);
+	bool IsAddressBreakPoint(u32 address) const;
+	bool IsTempBreakPoint(u32 address) const;
 
 	// Add BreakPoint
-	void Add(u32 em_address, bool temp=false);
+	void Add(u32 em_address, bool temp = false);
 	void Add(const TBreakPoint& bp);
 
 	// Remove Breakpoint
 	void Remove(u32 _iAddress);
 	void Clear();
-
-	void DeleteByAddress(u32 _Address);
+	void ClearAllTemporary();
 
 private:
 	TBreakPoints m_BreakPoints;
-	u32 m_iBreakOnCount;
 };
 
 
@@ -94,5 +102,35 @@ public:
 	TMemCheck *GetMemCheck(u32 address);
 	void Remove(u32 _Address);
 
-	void Clear() { m_MemChecks.clear(); };
+	void Clear() { m_MemChecks.clear(); }
+
+	bool HasAny() const { return !m_MemChecks.empty(); }
+};
+
+class Watches
+{
+public:
+	typedef std::vector<TWatch> TWatches;
+	typedef std::vector<std::string> TWatchesStr;
+
+	const TWatches& GetWatches() { return m_Watches; }
+
+	TWatchesStr GetStrings() const;
+	void AddFromStrings(const TWatchesStr& bps);
+
+	bool IsAddressWatch(u32 _iAddress) const;
+
+	// Add BreakPoint
+	void Add(u32 em_address);
+	void Add(const TWatch& bp);
+
+	void Update(int count, u32 em_address);
+	void UpdateName(int count, const std::string name);
+
+	// Remove Breakpoint
+	void Remove(u32 _iAddress);
+	void Clear();
+
+private:
+	TWatches m_Watches;
 };

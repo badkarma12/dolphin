@@ -1,12 +1,14 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
+#include "Core/HW/EXI_Device.h"
+
 #if HAVE_PORTAUDIO
 
-#include "Common/StdMutex.h"
+#include <mutex>
 
 class CEXIMic : public IEXIDevice
 {
@@ -15,7 +17,7 @@ public:
 	virtual ~CEXIMic();
 	void SetCS(int cs) override;
 	bool IsInterruptSet() override;
-	bool IsPresent() override;
+	bool IsPresent() const override;
 
 private:
 	static u8 const exi_id[];
@@ -58,7 +60,7 @@ private:
 	int ring_pos;
 	u8 ring_buffer[64 * sample_size];
 
-	// 0 to disable interrupts, else it will be checked against current cpu ticks
+	// 0 to disable interrupts, else it will be checked against current CPU ticks
 	// to determine if interrupt should be raised
 	u64 next_int_ticks;
 	void UpdateNextInterruptTicks();
@@ -93,7 +95,7 @@ public:
 	int samples_avail;
 
 protected:
-	virtual void TransferByte(u8 &byte) override;
+	void TransferByte(u8& byte) override;
 };
 
 #else // HAVE_PORTAUDIO

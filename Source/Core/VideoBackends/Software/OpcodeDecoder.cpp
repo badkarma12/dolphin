@@ -1,9 +1,9 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include "Common/ChunkFile.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Core/HW/Memmap.h"
 #include "VideoBackends/Software/BPMemLoader.h"
 #include "VideoBackends/Software/CPMemLoader.h"
@@ -14,8 +14,8 @@
 #include "VideoBackends/Software/SWVertexLoader.h"
 #include "VideoBackends/Software/SWVideoConfig.h"
 #include "VideoBackends/Software/XFMemLoader.h"
-#include "VideoCommon/DataReader.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/VertexLoaderUtils.h"
 
 typedef void (*DecodingFunction)(u32);
 
@@ -34,7 +34,7 @@ static u8 lastPrimCmd;
 void DoState(PointerWrap &p)
 {
 	p.Do(minCommandSize);
-	// Not sure what is wrong with this. Something(s) in here is causing dolphin to crash/hang when loading states saved from another run of dolphin. Doesn't seem too important anyway...
+	// Not sure what is wrong with this. Something(s) in here is causing Dolphin to crash/hang when loading states saved from another run of Dolphin. Doesn't seem too important anyway...
 	//vertexLoader.DoState(p);
 	p.Do(readOpcode);
 	p.Do(inObjectStream);
@@ -57,7 +57,7 @@ static void DecodePrimitiveStream(u32 iBufferSize)
 	{
 		while (streamSize > 0 && iBufferSize >= vertexSize)
 		{
-			g_pVideoData += vertexSize;
+			g_video_buffer_read_ptr += vertexSize;
 			iBufferSize -= vertexSize;
 			streamSize--;
 		}
@@ -85,7 +85,7 @@ static void ReadXFData(u32 iBufferSize)
 
 	u32 pData[16];
 	for (int i = 0; i < streamSize; i++)
-		pData[i] = DataReadU32();
+		pData[i] = DataRead<u32>();
 	SWLoadXFReg(streamSize, streamAddress, pData);
 
 	// return to normal command processing
@@ -94,33 +94,33 @@ static void ReadXFData(u32 iBufferSize)
 
 static void ExecuteDisplayList(u32 addr, u32 count)
 {
-	u8 *videoDataSave = g_pVideoData;
+	u8 *videoDataSave = g_video_buffer_read_ptr;
 
 	u8 *dlStart = Memory::GetPointer(addr);
 
-	g_pVideoData = dlStart;
+	g_video_buffer_read_ptr = dlStart;
 
 	while (OpcodeDecoder::CommandRunnable(count))
 	{
 		OpcodeDecoder::Run(count);
 
 		// if data was read by the opcode decoder then the video data pointer changed
-		u32 readCount = (u32)(g_pVideoData - dlStart);
-		dlStart = g_pVideoData;
+		u32 readCount = (u32)(g_video_buffer_read_ptr - dlStart);
+		dlStart = g_video_buffer_read_ptr;
 
 		_assert_msg_(VIDEO, count >= readCount, "Display list underrun");
 
 		count -= readCount;
 	}
 
-	g_pVideoData = videoDataSave;
+	g_video_buffer_read_ptr = videoDataSave;
 }
 
 static void DecodeStandard(u32 bufferSize)
 {
 	_assert_msg_(VIDEO, CommandRunnable(bufferSize), "Underflow during standard opcode decoding");
 
-	int Cmd = DataReadU8();
+	int Cmd = DataRead<u8>();
 
 	if (Cmd == GX_NOP)
 		return;
@@ -148,15 +148,15 @@ static void DecodeStandard(u32 bufferSize)
 
 	case GX_LOAD_CP_REG: //0x08
 		{
-			u32 SubCmd = DataReadU8();
-			u32 Value = DataReadU32();
+			u32 SubCmd = DataRead<u8>();
+			u32 Value = DataRead<u32>();
 			SWLoadCPReg(SubCmd, Value);
 		}
 		break;
 
 	case GX_LOAD_XF_REG:
 		{
-			u32 Cmd2 = DataReadU32();
+			u32 Cmd2 = DataRead<u32>();
 			streamSize = ((Cmd2 >> 16) & 15) + 1;
 			streamAddress = Cmd2 & 0xFFFF;
 			currentFunction = ReadXFData;
@@ -166,22 +166,22 @@ static void DecodeStandard(u32 bufferSize)
 		break;
 
 	case GX_LOAD_INDX_A: //used for position matrices
-		SWLoadIndexedXF(DataReadU32(), 0xC);
+		SWLoadIndexedXF(DataRead<u32>(), 0xC);
 		break;
 	case GX_LOAD_INDX_B: //used for normal matrices
-		SWLoadIndexedXF(DataReadU32(), 0xD);
+		SWLoadIndexedXF(DataRead<u32>(), 0xD);
 		break;
 	case GX_LOAD_INDX_C: //used for postmatrices
-		SWLoadIndexedXF(DataReadU32(), 0xE);
+		SWLoadIndexedXF(DataRead<u32>(), 0xE);
 		break;
 	case GX_LOAD_INDX_D: //used for lights
-		SWLoadIndexedXF(DataReadU32(), 0xF);
+		SWLoadIndexedXF(DataRead<u32>(), 0xF);
 		break;
 
 	case GX_CMD_CALL_DL:
 		{
-			u32 dwAddr  = DataReadU32();
-			u32 dwCount = DataReadU32();
+			u32 dwAddr  = DataRead<u32>();
+			u32 dwCount = DataRead<u32>();
 			ExecuteDisplayList(dwAddr, dwCount);
 		}
 		break;
@@ -196,7 +196,7 @@ static void DecodeStandard(u32 bufferSize)
 
 	case GX_LOAD_BP_REG: //0x61
 		{
-			u32 cmd = DataReadU32();
+			u32 cmd = DataRead<u32>();
 			SWLoadBPReg(cmd);
 		}
 		break;
@@ -210,7 +210,7 @@ static void DecodeStandard(u32 bufferSize)
 			vertexLoader.SetFormat(vatIndex, primitiveType);
 
 			// switch to primitive processing
-			streamSize = DataReadU16();
+			streamSize = DataRead<u16>();
 			currentFunction = DecodePrimitiveStream;
 			minCommandSize = vertexLoader.GetVertexSize();
 			readOpcode = false;
@@ -249,7 +249,7 @@ bool CommandRunnable(u32 iBufferSize)
 
 	if (readOpcode)
 	{
-		u8 Cmd = DataPeek8(0);
+		u8 Cmd = DataPeek<u8>(0);
 		u32 minSize = 1;
 
 		switch (Cmd)

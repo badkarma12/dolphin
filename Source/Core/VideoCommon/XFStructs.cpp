@@ -1,10 +1,13 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include "Common/Common.h"
 #include "Core/HW/Memmap.h"
 #include "VideoCommon/CPMemory.h"
+#include "VideoCommon/DataReader.h"
+#include "VideoCommon/Fifo.h"
+#include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/PixelShaderManager.h"
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VertexShaderManager.h"
@@ -13,18 +16,18 @@
 
 static void XFMemWritten(u32 transferSize, u32 baseAddress)
 {
-	VertexManager::Flush();
+	VertexManagerBase::Flush();
 	VertexShaderManager::InvalidateXFRange(baseAddress, baseAddress + transferSize);
 }
 
-static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
+static void XFRegWritten(int transferSize, u32 baseAddress, DataReader src)
 {
 	u32 address = baseAddress;
 	u32 dataIndex = 0;
 
 	while (transferSize > 0 && address < 0x1058)
 	{
-		u32 newValue = pData[dataIndex];
+		u32 newValue = src.Peek<u32>(dataIndex * sizeof(u32));
 		u32 nextAddress = address + 1;
 
 		switch (address)
@@ -49,7 +52,7 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 
 		case XFMEM_SETNUMCHAN:
 			if (xfmem.numChan.numColorChans != (newValue & 3))
-				VertexManager::Flush();
+				VertexManagerBase::Flush();
 			break;
 
 		case XFMEM_SETCHAN0_AMBCOLOR: // Channel Ambient Color
@@ -58,8 +61,8 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 				u8 chan = address - XFMEM_SETCHAN0_AMBCOLOR;
 				if (xfmem.ambColor[chan] != newValue)
 				{
-					VertexManager::Flush();
-					VertexShaderManager::SetMaterialColorChanged(chan, newValue);
+					VertexManagerBase::Flush();
+					VertexShaderManager::SetMaterialColorChanged(chan);
 				}
 				break;
 			}
@@ -70,8 +73,8 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 				u8 chan = address - XFMEM_SETCHAN0_MATCOLOR;
 				if (xfmem.matColor[chan] != newValue)
 				{
-					VertexManager::Flush();
-					VertexShaderManager::SetMaterialColorChanged(chan + 2, newValue);
+					VertexManagerBase::Flush();
+					VertexShaderManager::SetMaterialColorChanged(chan + 2);
 				}
 				break;
 			}
@@ -81,12 +84,12 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case XFMEM_SETCHAN0_ALPHA: // Channel Alpha
 		case XFMEM_SETCHAN1_ALPHA:
 			if (((u32*)&xfmem)[address] != (newValue & 0x7fff))
-				VertexManager::Flush();
+				VertexManagerBase::Flush();
 			break;
 
 		case XFMEM_DUALTEX:
 			if (xfmem.dualTexTrans.enabled != (newValue & 1))
-				VertexManager::Flush();
+				VertexManagerBase::Flush();
 			break;
 
 
@@ -105,9 +108,10 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case XFMEM_SETVIEWPORT+3:
 		case XFMEM_SETVIEWPORT+4:
 		case XFMEM_SETVIEWPORT+5:
-			VertexManager::Flush();
+			VertexManagerBase::Flush();
 			VertexShaderManager::SetViewportChanged();
 			PixelShaderManager::SetViewportChanged();
+			GeometryShaderManager::SetViewportChanged();
 
 			nextAddress = XFMEM_SETVIEWPORT + 6;
 			break;
@@ -119,15 +123,16 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case XFMEM_SETPROJECTION+4:
 		case XFMEM_SETPROJECTION+5:
 		case XFMEM_SETPROJECTION+6:
-			VertexManager::Flush();
+			VertexManagerBase::Flush();
 			VertexShaderManager::SetProjectionChanged();
+			GeometryShaderManager::SetProjectionChanged();
 
 			nextAddress = XFMEM_SETPROJECTION + 7;
 			break;
 
 		case XFMEM_SETNUMTEXGENS: // GXSetNumTexGens
 			if (xfmem.numTexGen.numTexGens != (newValue & 15))
-				VertexManager::Flush();
+				VertexManagerBase::Flush();
 			break;
 
 		case XFMEM_SETTEXMTXINFO:
@@ -138,7 +143,7 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case XFMEM_SETTEXMTXINFO+5:
 		case XFMEM_SETTEXMTXINFO+6:
 		case XFMEM_SETTEXMTXINFO+7:
-			VertexManager::Flush();
+			VertexManagerBase::Flush();
 
 			nextAddress = XFMEM_SETTEXMTXINFO + 8;
 			break;
@@ -151,7 +156,7 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case XFMEM_SETPOSMTXINFO+5:
 		case XFMEM_SETPOSMTXINFO+6:
 		case XFMEM_SETPOSMTXINFO+7:
-			VertexManager::Flush();
+			VertexManagerBase::Flush();
 
 			nextAddress = XFMEM_SETPOSMTXINFO + 8;
 			break;
@@ -179,7 +184,8 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 		case 0x1017:
 
 		default:
-			WARN_LOG(VIDEO, "Unknown XF Reg: %x=%x", address, newValue);
+			if (newValue != 0) // Ignore writes of zero.
+				WARN_LOG(VIDEO, "Unknown XF Reg: %x=%x", address, newValue);
 			break;
 		}
 
@@ -191,7 +197,7 @@ static void XFRegWritten(int transferSize, u32 baseAddress, u32 *pData)
 	}
 }
 
-void LoadXFReg(u32 transferSize, u32 baseAddress, u32 *pData)
+void LoadXFReg(u32 transferSize, u32 baseAddress, DataReader src)
 {
 	// do not allow writes past registers
 	if (baseAddress + transferSize > 0x1058)
@@ -225,16 +231,20 @@ void LoadXFReg(u32 transferSize, u32 baseAddress, u32 *pData)
 		}
 
 		XFMemWritten(xfMemTransferSize, xfMemBase);
-		memcpy((u32*)(&xfmem) + xfMemBase, pData, xfMemTransferSize * 4);
-
-		pData += xfMemTransferSize;
+		for (u32 i = 0; i < xfMemTransferSize; i++)
+		{
+			((u32*)&xfmem)[xfMemBase + i] = src.Read<u32>();
+		}
 	}
 
 	// write to XF regs
 	if (transferSize > 0)
 	{
-		XFRegWritten(transferSize, baseAddress, pData);
-		memcpy((u32*)(&xfmem) + baseAddress, pData, transferSize * 4);
+		XFRegWritten(transferSize, baseAddress, src);
+		for (u32 i = 0; i < transferSize; i++)
+		{
+			((u32*)&xfmem)[baseAddress + i] = src.Read<u32>();
+		}
 	}
 }
 
@@ -247,7 +257,15 @@ void LoadIndexedXF(u32 val, int refarray)
 	//load stuff from array to address in xf mem
 
 	u32* currData = (u32*)(&xfmem) + address;
-	u32* newData = (u32*)Memory::GetPointer(arraybases[refarray] + arraystrides[refarray] * index);
+	u32* newData;
+	if (g_use_deterministic_gpu_thread)
+	{
+		newData = (u32*)PopFifoAuxBuffer(size * sizeof(u32));
+	}
+	else
+	{
+		newData = (u32*)Memory::GetPointer(g_main_cp_state.array_bases[refarray] + g_main_cp_state.array_strides[refarray] * index);
+	}
 	bool changed = false;
 	for (int i = 0; i < size; ++i)
 	{
@@ -263,4 +281,15 @@ void LoadIndexedXF(u32 val, int refarray)
 		for (int i = 0; i < size; ++i)
 			currData[i] = Common::swap32(newData[i]);
 	}
+}
+
+void PreprocessIndexedXF(u32 val, int refarray)
+{
+	int index = val >> 16;
+	int size = ((val >> 12) & 0xF) + 1;
+
+	u32* new_data = (u32*)Memory::GetPointer(g_preprocess_cp_state.array_bases[refarray] + g_preprocess_cp_state.array_strides[refarray] * index);
+
+	size_t buf_size = size * sizeof(u32);
+	PushFifoAuxBuffer(new_data, buf_size);
 }

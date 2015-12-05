@@ -1,3 +1,7 @@
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
+
 #pragma once
 
 #include <cstring>
@@ -18,6 +22,7 @@ public:
 	virtual void ClearBreakpoint(unsigned int /*address*/){}
 	virtual void ClearAllBreakpoints() {}
 	virtual void ToggleBreakpoint(unsigned int /*address*/){}
+	virtual void AddWatch(unsigned int /*address*/){}
 	virtual void ClearAllMemChecks() {}
 	virtual bool IsMemCheck(unsigned int /*address*/) {return false;}
 	virtual void ToggleMemCheck(unsigned int /*address*/){}
@@ -29,7 +34,6 @@ public:
 	virtual void SetPC(unsigned int /*address*/) {}
 	virtual void Step() {}
 	virtual void RunToBreakpoint() {}
-	virtual void BreakNow() {}
 	virtual void InsertBLR(unsigned int /*address*/, unsigned int /*value*/) {}
 	virtual int GetColor(unsigned int /*address*/){return 0xFFFFFFFF;}
 	virtual std::string GetDescription(unsigned int /*address*/) = 0;

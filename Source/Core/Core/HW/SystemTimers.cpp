@@ -1,5 +1,5 @@
-// Copyright 2014 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 // This file controls all system timers
@@ -43,7 +43,7 @@ IPC_HLE_PERIOD: For the Wiimote this is the call schedule:
 */
 
 #include "Common/Atomic.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
 
@@ -61,39 +61,11 @@ IPC_HLE_PERIOD: For the Wiimote this is the call schedule:
 #include "Core/IPC_HLE/WII_IPC_HLE.h"
 #include "Core/PowerPC/PowerPC.h"
 
-#include "VideoCommon/CommandProcessor.h"
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/VideoBackendBase.h"
-
 
 namespace SystemTimers
 {
-
-static u32 CPU_CORE_CLOCK  = 486000000u;             // 486 mhz (its not 485, stop bugging me!)
-
-/*
-GameCube                   MHz
-flipper <-> ARAM bus:      81 (DSP)
-gekko <-> flipper bus:     162
-flipper <-> 1T-SRAM bus:   324
-gekko:                     486
-
-These contain some guesses:
-Wii                             MHz
-hollywood <-> GDDR3 RAM bus:    ??? no idea really
-broadway <-> hollywood bus:     243
-hollywood <-> 1T-SRAM bus:      486
-broadway:                       729
-*/
-// Ratio of TB and Decrementer to clock cycles.
-// TB clk is 1/4 of BUS clk. And it seems BUS clk is really 1/3 of CPU clk.
-// So, ratio is 1 / (1/4 * 1/3 = 1/12) = 12.
-// note: ZWW is ok and faster with TIMER_RATIO=8 though.
-// !!! POSSIBLE STABLE PERF BOOST HACK THERE !!!
-
-enum
-{
-	TIMER_RATIO = 12
-};
 
 static int et_Dec;
 static int et_VI;
@@ -105,24 +77,23 @@ static int et_IPC_HLE;
 static int et_PatchEngine; // PatchEngine updates every 1/60th of a second by default
 static int et_Throttle;
 
-// These are badly educated guesses
-// Feel free to experiment. Set these in Init below.
-static int
-	// This is a fixed value, don't change it
-	AUDIO_DMA_PERIOD,
+static u32 s_cpu_core_clock = 486000000u;             // 486 mhz (its not 485, stop bugging me!)
+static u64 s_last_sync_gpu_tick;
 
-	// Regulates the speed of the Command Processor
-	CP_PERIOD,
+// These two are badly educated guesses.
+// Feel free to experiment. Set them in Init below.
 
-	// This is completely arbitrary. If we find that we need lower latency, we can just
-	// increase this number.
-	IPC_HLE_PERIOD;
+// This is a fixed value, don't change it
+static int s_audio_dma_period;
+// This is completely arbitrary. If we find that we need lower latency,
+// we can just increase this number.
+static int s_ipc_hle_period;
 
 
 
 u32 GetTicksPerSecond()
 {
-	return CPU_CORE_CLOCK;
+	return s_cpu_core_clock;
 }
 
 // DSP/CPU timeslicing.
@@ -136,25 +107,24 @@ static void DSPCallback(u64 userdata, int cyclesLate)
 
 static void AudioDMACallback(u64 userdata, int cyclesLate)
 {
-	int fields = VideoInterface::GetNumFields();
-	int period = CPU_CORE_CLOCK / (AudioInterface::GetAIDSampleRate() * 4 / 32 * fields);
+	int period = s_cpu_core_clock / (AudioInterface::GetAIDSampleRate() * 4 / 32);
 	DSP::UpdateAudioDMA();  // Push audio to speakers.
 	CoreTiming::ScheduleEvent(period - cyclesLate, et_AudioDMA);
 }
 
 static void IPC_HLE_UpdateCallback(u64 userdata, int cyclesLate)
 {
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bWii)
+	if (SConfig::GetInstance().bWii)
 	{
 		WII_IPC_HLE_Interface::UpdateDevices();
-		CoreTiming::ScheduleEvent(IPC_HLE_PERIOD - cyclesLate, et_IPC_HLE);
+		CoreTiming::ScheduleEvent(s_ipc_hle_period - cyclesLate, et_IPC_HLE);
 	}
 }
 
 static void VICallback(u64 userdata, int cyclesLate)
 {
 	VideoInterface::Update();
-	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerLine() - cyclesLate, et_VI);
+	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerHalfLine() - cyclesLate, et_VI);
 }
 
 static void SICallback(u64 userdata, int cyclesLate)
@@ -165,14 +135,18 @@ static void SICallback(u64 userdata, int cyclesLate)
 
 static void CPCallback(u64 userdata, int cyclesLate)
 {
-	CommandProcessor::Update();
-	CoreTiming::ScheduleEvent(CP_PERIOD - cyclesLate, et_CP);
+	u64 now = CoreTiming::GetTicks();
+	int next = g_video_backend->Video_Sync((int)(now - s_last_sync_gpu_tick));
+	s_last_sync_gpu_tick = now;
+
+	if (next > 0)
+		CoreTiming::ScheduleEvent(next, et_CP);
 }
 
 static void DecrementerCallback(u64 userdata, int cyclesLate)
 {
 	PowerPC::ppcState.spr[SPR_DEC] = 0xFFFFFFFF;
-	Common::AtomicOr(PowerPC::ppcState.Exceptions, EXCEPTION_DECREMENTER);
+	PowerPC::ppcState.Exceptions |= EXCEPTION_DECREMENTER;
 }
 
 void DecrementerSet()
@@ -209,12 +183,14 @@ static void PatchEngineCallback(u64 userdata, int cyclesLate)
 {
 	// Patch mem and run the Action Replay
 	PatchEngine::ApplyFramePatches();
-	PatchEngine::ApplyARPatches();
-	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerFrame() - cyclesLate, et_PatchEngine);
+	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerField() - cyclesLate, et_PatchEngine);
 }
 
 static void ThrottleCallback(u64 last_time, int cyclesLate)
 {
+	// Allow the GPU thread to sleep. Setting this flag here limits the wakeups to 1 kHz.
+	GpuMaySleep();
+
 	u32 time = Common::Timer::GetTimeMs();
 
 	int diff = (u32)last_time - time;
@@ -240,15 +216,15 @@ static void ThrottleCallback(u64 last_time, int cyclesLate)
 // split from Init to break a circular dependency between VideoInterface::Init and SystemTimers::Init
 void PreInit()
 {
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bWii)
-		CPU_CORE_CLOCK = 729000000u;
+	if (SConfig::GetInstance().bWii)
+		s_cpu_core_clock = 729000000u;
 	else
-		CPU_CORE_CLOCK = 486000000u;
+		s_cpu_core_clock = 486000000u;
 }
 
 void Init()
 {
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bWii)
+	if (SConfig::GetInstance().bWii)
 	{
 		// AyuanX: TO BE TWEAKED
 		// Now the 1500 is a pure assumption
@@ -256,18 +232,15 @@ void Init()
 
 		// FYI, WII_IPC_HLE_Interface::Update is also called in WII_IPCInterface::Write32
 		const int freq = 1500;
-		IPC_HLE_PERIOD = GetTicksPerSecond() / (freq * VideoInterface::GetNumFields());
+		s_ipc_hle_period = GetTicksPerSecond() / freq;
 	}
 
 	// System internal sample rate is fixed at 32KHz * 4 (16bit Stereo) / 32 bytes DMA
-	AUDIO_DMA_PERIOD = CPU_CORE_CLOCK / (AudioInterface::GetAIDSampleRate() * 4 / 32);
-
-	// Emulated gekko <-> flipper bus speed ratio (cpu clock / flipper clock)
-	CP_PERIOD = GetTicksPerSecond() / 10000;
+	s_audio_dma_period = s_cpu_core_clock / (AudioInterface::GetAIDSampleRate() * 4 / 32);
 
 	Common::Timer::IncreaseResolution();
 	// store and convert localtime at boot to timebase ticks
-	CoreTiming::SetFakeTBStartValue((u64)(CPU_CORE_CLOCK / TIMER_RATIO) * (u64)CEXIIPL::GetGCTime());
+	CoreTiming::SetFakeTBStartValue((u64)(s_cpu_core_clock / TIMER_RATIO) * (u64)CEXIIPL::GetGCTime());
 	CoreTiming::SetFakeTBStartTicks(CoreTiming::GetTicks());
 
 	CoreTiming::SetFakeDecStartValue(0xFFFFFFFF);
@@ -276,7 +249,7 @@ void Init()
 	et_Dec = CoreTiming::RegisterEvent("DecCallback", DecrementerCallback);
 	et_VI = CoreTiming::RegisterEvent("VICallback", VICallback);
 	et_SI = CoreTiming::RegisterEvent("SICallback", SICallback);
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU)
+	if (SConfig::GetInstance().bCPUThread && SConfig::GetInstance().bSyncGPU)
 		et_CP = CoreTiming::RegisterEvent("CPCallback", CPCallback);
 	et_DSP = CoreTiming::RegisterEvent("DSPCallback", DSPCallback);
 	et_AudioDMA = CoreTiming::RegisterEvent("AudioDMACallback", AudioDMACallback);
@@ -284,18 +257,19 @@ void Init()
 	et_PatchEngine = CoreTiming::RegisterEvent("PatchEngine", PatchEngineCallback);
 	et_Throttle = CoreTiming::RegisterEvent("Throttle", ThrottleCallback);
 
-	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerLine(), et_VI);
+	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerHalfLine(), et_VI);
 	CoreTiming::ScheduleEvent(0, et_DSP);
-	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerFrame(), et_SI);
-	CoreTiming::ScheduleEvent(AUDIO_DMA_PERIOD, et_AudioDMA);
+	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerField(), et_SI);
+	CoreTiming::ScheduleEvent(s_audio_dma_period, et_AudioDMA);
 	CoreTiming::ScheduleEvent(0, et_Throttle, Common::Timer::GetTimeMs());
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU)
-		CoreTiming::ScheduleEvent(CP_PERIOD, et_CP);
+	if (SConfig::GetInstance().bCPUThread && SConfig::GetInstance().bSyncGPU)
+		CoreTiming::ScheduleEvent(0, et_CP);
+	s_last_sync_gpu_tick = CoreTiming::GetTicks();
 
-	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerFrame(), et_PatchEngine);
+	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerField(), et_PatchEngine);
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bWii)
-		CoreTiming::ScheduleEvent(IPC_HLE_PERIOD, et_IPC_HLE);
+	if (SConfig::GetInstance().bWii)
+		CoreTiming::ScheduleEvent(s_ipc_hle_period, et_IPC_HLE);
 }
 
 void Shutdown()

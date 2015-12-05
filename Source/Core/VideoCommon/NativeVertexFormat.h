@@ -1,10 +1,15 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include "Common/Common.h"
+#include <cstring>
+#include <functional> // for hash
+
+#include "Common/CommonTypes.h"
+#include "Common/Hash.h"
+#include "Common/NonCopyable.h"
 
 // m_components
 enum
@@ -40,14 +45,6 @@ enum
 	VB_HAS_UVALL=(0xff<<15),
 	VB_HAS_UVTEXMTXSHIFT=13,
 };
-
-#ifdef WIN32
-#define LOADERDECL __cdecl
-#else
-#define LOADERDECL
-#endif
-
-typedef void (LOADERDECL *TPipelineFunction)();
 
 enum VarType
 {
@@ -87,6 +84,20 @@ struct PortableVertexDeclaration
 	}
 };
 
+namespace std
+{
+
+template <>
+struct hash<PortableVertexDeclaration>
+{
+	size_t operator()(const PortableVertexDeclaration& decl) const
+	{
+		return HashFletcher((u8 *) &decl, sizeof(decl));
+	}
+};
+
+}
+
 // The implementation of this class is specific for GL/DX, so NativeVertexFormat.cpp
 // is in the respective backend, not here in VideoCommon.
 
@@ -97,17 +108,14 @@ class NativeVertexFormat : NonCopyable
 public:
 	virtual ~NativeVertexFormat() {}
 
-	virtual void Initialize(const PortableVertexDeclaration &vtx_decl) = 0;
 	virtual void SetupVertexPointers() = 0;
 
-	u32 GetVertexStride() const { return vertex_stride; }
-
-	// TODO: move this under private:
-	u32 m_components;  // VB_HAS_X. Bitmask telling what vertex components are present.
+	u32 GetVertexStride() const { return vtx_decl.stride; }
+	const PortableVertexDeclaration& GetVertexDeclaration() const { return vtx_decl; }
 
 protected:
 	// Let subclasses construct.
 	NativeVertexFormat() {}
 
-	u32 vertex_stride;
+	PortableVertexDeclaration vtx_decl;
 };

@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2012 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <algorithm>
@@ -8,15 +8,18 @@
 #include <string>
 #include <vector>
 
-#include "Common/Common.h"
+#include "Common/CommonFuncs.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
+#include "Common/MsgHandler.h"
+#include "Common/Logging/Log.h"
 #include "DiscIO/WbfsBlob.h"
 
 namespace DiscIO
 {
-static const u64 wii_sector_size = 0x8000;
-static const u64 wii_sector_count = 143432 * 2;
-static const u64 wii_disc_header_size = 256;
+static const u64 WII_SECTOR_SIZE = 0x8000;
+static const u64 WII_SECTOR_COUNT = 143432 * 2;
+static const u64 WII_DISC_HEADER_SIZE = 256;
 
 static inline u64 align(u64 value, u64 bounds)
 {
@@ -34,18 +37,23 @@ WbfsFileReader::WbfsFileReader(const std::string& filename)
 
 	// Grab disc info (assume slot 0, checked in ReadHeader())
 	m_wlba_table = new u16[m_blocks_per_disc];
-	m_files[0]->file.Seek(hd_sector_size + wii_disc_header_size /*+ i * m_disc_info_size*/, SEEK_SET);
+	m_files[0]->file.Seek(m_hd_sector_size + WII_DISC_HEADER_SIZE /*+ i * m_disc_info_size*/, SEEK_SET);
 	m_files[0]->file.ReadBytes(m_wlba_table, m_blocks_per_disc * sizeof(u16));
+	for (size_t i = 0; i < m_blocks_per_disc; i++)
+		m_wlba_table[i] = Common::swap16(m_wlba_table[i]);
 }
 
 WbfsFileReader::~WbfsFileReader()
 {
-	for (u32 i = 0; i != m_files.size(); ++ i)
-	{
-		delete m_files[i];
-	}
+	for (file_entry* entry : m_files)
+		delete entry;
 
 	delete[] m_wlba_table;
+}
+
+u64 WbfsFileReader::GetDataSize() const
+{
+	return WII_SECTOR_COUNT * WII_SECTOR_SIZE;
 }
 
 bool WbfsFileReader::OpenFiles(const std::string& filename)
@@ -58,7 +66,7 @@ bool WbfsFileReader::OpenFiles(const std::string& filename)
 
 		// Replace last character with index (e.g. wbfs = wbf1)
 		std::string path = filename;
-		if (0 != m_total_files)
+		if (m_total_files != 0)
 		{
 			path[path.length() - 1] = '0' + m_total_files;
 		}
@@ -73,64 +81,50 @@ bool WbfsFileReader::OpenFiles(const std::string& filename)
 		new_entry->size = new_entry->file.GetSize();
 		m_size += new_entry->size;
 
-		m_total_files ++;
+		m_total_files++;
 		m_files.push_back(new_entry);
 	}
 }
 
 bool WbfsFileReader::ReadHeader()
 {
-	m_files[0]->file.Seek(4, SEEK_SET);
-
 	// Read hd size info
-	m_files[0]->file.ReadBytes(&hd_sector_count, 4);
-	hd_sector_count = Common::swap32(hd_sector_count);
+	m_files[0]->file.ReadBytes(&m_header, sizeof(WbfsHeader));
+	m_header.hd_sector_count = Common::swap32(m_header.hd_sector_count);
 
-	m_files[0]->file.ReadBytes(&hd_sector_shift, 1);
-	hd_sector_size = 1ull << hd_sector_shift;
+	m_hd_sector_size = 1ull << m_header.hd_sector_shift;
 
-	if (m_size != hd_sector_count * hd_sector_size)
-	{
-		//printf("File size doesn't match expected size\n");
+	if (m_size != (m_header.hd_sector_count * m_hd_sector_size))
 		return false;
-	}
 
 	// Read wbfs cluster info
-	m_files[0]->file.ReadBytes(&wbfs_sector_shift, 1);
-	wbfs_sector_size = 1ull << wbfs_sector_shift;
-	wbfs_sector_count = m_size / wbfs_sector_size;
+	m_wbfs_sector_size = 1ull << m_header.wbfs_sector_shift;
+	m_wbfs_sector_count = m_size / m_wbfs_sector_size;
 
-	if (wbfs_sector_size < wii_sector_size)
-	{
-		//Setting this too low would case a very large memory allocation
+	if (m_wbfs_sector_size < WII_SECTOR_SIZE)
 		return false;
-	}
 
-	m_blocks_per_disc = (wii_sector_count * wii_sector_size) / wbfs_sector_size;
-	m_disc_info_size = align(wii_disc_header_size + m_blocks_per_disc * 2, hd_sector_size);
+	m_blocks_per_disc = (WII_SECTOR_COUNT * WII_SECTOR_SIZE + m_wbfs_sector_size - 1) / m_wbfs_sector_size;
+	m_disc_info_size = align(WII_DISC_HEADER_SIZE + m_blocks_per_disc * sizeof(u16), m_hd_sector_size);
 
-	// Read disc table
-	m_files[0]->file.Seek(2, SEEK_CUR);
-	m_files[0]->file.ReadBytes(disc_table, 500);
-
-	if (0 == disc_table[0])
-	{
-		//printf("Game must be in 'slot 0'\n");
-		return false;
-	}
-
-	return true;
+	return m_header.disc_table[0] != 0;
 }
 
 bool WbfsFileReader::Read(u64 offset, u64 nbytes, u8* out_ptr)
 {
 	while (nbytes)
 	{
-		u64 read_size = 0;
+		u64 read_size;
 		File::IOFile& data_file = SeekToCluster(offset, &read_size);
-		read_size = (read_size > nbytes) ? nbytes : read_size;
+		if (read_size == 0)
+			return false;
+		read_size = std::min(read_size, nbytes);
 
-		data_file.ReadBytes(out_ptr, read_size);
+		if (!data_file.ReadBytes(out_ptr, read_size))
+		{
+			data_file.Clear();
+			return false;
+		}
 
 		out_ptr += read_size;
 		nbytes -= read_size;
@@ -142,14 +136,14 @@ bool WbfsFileReader::Read(u64 offset, u64 nbytes, u8* out_ptr)
 
 File::IOFile& WbfsFileReader::SeekToCluster(u64 offset, u64* available)
 {
-	u64 base_cluster = offset >> wbfs_sector_shift;
+	u64 base_cluster = (offset >> m_header.wbfs_sector_shift);
 	if (base_cluster < m_blocks_per_disc)
 	{
-		u64 cluster_address = wbfs_sector_size * Common::swap16(m_wlba_table[base_cluster]);
-		u64 cluster_offset = offset & (wbfs_sector_size - 1);
+		u64 cluster_address = m_wbfs_sector_size * m_wlba_table[base_cluster];
+		u64 cluster_offset = offset & (m_wbfs_sector_size - 1);
 		u64 final_address = cluster_address + cluster_offset;
 
-		for (u32 i = 0; i != m_total_files; i ++)
+		for (u32 i = 0; i != m_total_files; i++)
 		{
 			if (final_address < (m_files[i]->base_address + m_files[i]->size))
 			{
@@ -157,7 +151,7 @@ File::IOFile& WbfsFileReader::SeekToCluster(u64 offset, u64* available)
 				if (available)
 				{
 					u64 till_end_of_file = m_files[i]->size - (final_address - m_files[i]->base_address);
-					u64 till_end_of_sector = wbfs_sector_size - cluster_offset;
+					u64 till_end_of_sector = m_wbfs_sector_size - cluster_offset;
 					*available = std::min(till_end_of_file, till_end_of_sector);
 				}
 
@@ -167,6 +161,8 @@ File::IOFile& WbfsFileReader::SeekToCluster(u64 offset, u64* available)
 	}
 
 	PanicAlert("Read beyond end of disc");
+	if (available)
+		*available = 0;
 	m_files[0]->file.Seek(0, SEEK_SET);
 	return m_files[0]->file;
 }

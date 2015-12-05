@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2012 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 // Thanks to Treeki for writing the original class - 29/01/2012
@@ -84,13 +84,15 @@ void SettingsHandler::Reset()
 
 void SettingsHandler::AddSetting(const std::string& key, const std::string& value)
 {
-	for (const char& c : key) {
+	for (const char& c : key)
+	{
 		WriteByte(c);
 	}
 
 	WriteByte('=');
 
-	for (const char& c : value) {
+	for (const char& c : value)
+	{
 		WriteByte(c);
 	}
 

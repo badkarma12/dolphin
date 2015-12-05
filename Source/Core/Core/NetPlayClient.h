@@ -1,39 +1,27 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <queue>
 #include <sstream>
-
-#include <SFML/Network.hpp>
-
-#include "Common/Common.h"
+#include <thread>
+#include <SFML/Network/Packet.hpp>
 #include "Common/CommonTypes.h"
 #include "Common/FifoQueue.h"
-#include "Common/Thread.h"
-#include "Common/Timer.h"
-
+#include "Common/TraversalClient.h"
 #include "Core/NetPlayProto.h"
-
 #include "InputCommon/GCPadStatus.h"
 
-class NetPad
-{
-public:
-	NetPad();
-	NetPad(const GCPadStatus* const);
-
-	u32 nHi;
-	u32 nLo;
-};
 
 class NetPlayUI
 {
 public:
-	virtual ~NetPlayUI() {};
+	virtual ~NetPlayUI() {}
 
 	virtual void BootGame(const std::string& filename) = 0;
 	virtual void StopGame() = 0;
@@ -49,23 +37,24 @@ public:
 
 class Player
 {
- public:
+public:
 	PlayerId    pid;
 	std::string name;
 	std::string revision;
 	u32         ping;
 };
 
-class NetPlayClient
+class NetPlayClient : public TraversalClientClient
 {
 public:
 	void ThreadFunc();
+	void SendAsync(sf::Packet* packet);
 
-	NetPlayClient(const std::string& address, const u16 port, NetPlayUI* dialog, const std::string& name);
+	NetPlayClient(const std::string& address, const u16 port, NetPlayUI* dialog, const std::string& name, bool traversal, const std::string& centralServer, u16 centralPort);
 	~NetPlayClient();
 
 	void GetPlayerList(std::string& list, std::vector<int>& pid_list);
-	void GetPlayers(std::vector<const Player *>& player_list);
+	std::vector<const Player*> GetPlayers();
 
 	bool is_connected;
 
@@ -77,12 +66,28 @@ public:
 
 	// Send and receive pads values
 	bool WiimoteUpdate(int _number, u8* data, const u8 size);
-	bool GetNetPads(const u8 pad_nb, const GCPadStatus* const, NetPad* const netvalues);
+	bool GetNetPads(const u8 pad_nb, GCPadStatus* pad_status);
+
+	void OnTraversalStateChanged() override;
+	void OnConnectReady(ENetAddress addr) override;
+	void OnConnectFailed(u8 reason) override;
 
 	u8 LocalPadToInGamePad(u8 localPad);
 	u8 InGamePadToLocalPad(u8 localPad);
 
 	u8 LocalWiimoteToInGameWiimote(u8 local_pad);
+
+	static void SendTimeBase();
+
+	enum State
+	{
+		WaitingForTraversalClientConnection,
+		WaitingForTraversalClientConnectReady,
+		Connecting,
+		WaitingForHelloResponse,
+		Connected,
+		Failure
+	} m_state;
 
 protected:
 	void ClearBuffers();
@@ -91,20 +96,24 @@ protected:
 	{
 		std::recursive_mutex game;
 		// lock order
-		std::recursive_mutex players, send;
+		std::recursive_mutex players;
+		std::recursive_mutex async_queue_write;
 	} m_crit;
 
-	Common::FifoQueue<NetPad>     m_pad_buffer[4];
-	Common::FifoQueue<NetWiimote> m_wiimote_buffer[4];
+	Common::FifoQueue<std::unique_ptr<sf::Packet>, false> m_async_queue;
 
-	NetPlayUI*    m_dialog;
-	sf::SocketTCP m_socket;
-	std::thread   m_thread;
-	sf::Selector<sf::SocketTCP> m_selector;
+	Common::FifoQueue<GCPadStatus> m_pad_buffer[4];
+	Common::FifoQueue<NetWiimote>  m_wiimote_buffer[4];
 
-	std::string   m_selected_game;
-	volatile bool m_is_running;
-	volatile bool m_do_loop;
+	NetPlayUI*   m_dialog;
+
+	ENetHost*    m_client;
+	ENetPeer*    m_server;
+	std::thread  m_thread;
+
+	std::string       m_selected_game;
+	std::atomic<bool> m_is_running;
+	std::atomic<bool> m_do_loop;
 
 	unsigned int  m_target_buffer_size;
 
@@ -112,19 +121,28 @@ protected:
 
 	u32 m_current_game;
 
-	PadMapping m_pad_map[4];
-	PadMapping m_wiimote_map[4];
+	PadMappingArray m_pad_map;
+	PadMappingArray m_wiimote_map;
 
 	bool m_is_recording;
 
 private:
 	void UpdateDevices();
-	void SendPadState(const PadMapping in_game_pad, const NetPad& np);
+	void SendPadState(const PadMapping in_game_pad, const GCPadStatus& np);
 	void SendWiimoteState(const PadMapping in_game_pad, const NetWiimote& nw);
 	unsigned int OnData(sf::Packet& packet);
+	void Send(sf::Packet& packet);
+	void Disconnect();
+	bool Connect();
 
 	PlayerId m_pid;
 	std::map<PlayerId, Player> m_players;
+	std::string m_host_spec;
+	std::string m_player_name;
+	bool m_connecting;
+	TraversalClient* m_traversal_client;
+
+	u32 m_timebase_frame;
 };
 
 void NetPlay_Enable(NetPlayClient* const np);

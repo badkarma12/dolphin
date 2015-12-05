@@ -1,8 +1,9 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cinttypes>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
 
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -47,21 +49,19 @@ static Common::FifoQueue<BaseEvent, false> tsQueue;
 // event pools
 static Event *eventPool = nullptr;
 
+static float lastOCFactor;
 int slicelength;
 static int maxSliceLength = MAX_SLICE_LENGTH;
 
-static s64 globalTimer;
 static s64 idledCycles;
-
 static u32 fakeDecStartValue;
 static u64 fakeDecStartTicks;
-static u64 fakeTBStartValue;
-static u64 fakeTBStartTicks;
+
+s64 globalTimer;
+u64 fakeTBStartValue;
+u64 fakeTBStartTicks;
 
 static int ev_lost;
-
-
-static void (*advanceCallback)(int cyclesExecuted) = nullptr;
 
 static Event* GetNewEvent()
 {
@@ -80,6 +80,23 @@ static void FreeEvent(Event* ev)
 }
 
 static void EmptyTimedCallback(u64 userdata, int cyclesLate) {}
+
+// Changing the CPU speed in Dolphin isn't actually done by changing the physical clock rate,
+// but by changing the amount of work done in a particular amount of time. This tends to be more
+// compatible because it stops the games from actually knowing directly that the clock rate has
+// changed, and ensures that anything based on waiting a specific number of cycles still works.
+//
+// Technically it might be more accurate to call this changing the IPC instead of the CPU speed,
+// but the effect is largely the same.
+static int DowncountToCycles(int downcount)
+{
+	return (int)(downcount / lastOCFactor);
+}
+
+static int CyclesToDowncount(int cycles)
+{
+	return (int)(cycles * lastOCFactor);
+}
 
 int RegisterEvent(const std::string& name, TimedCallback callback)
 {
@@ -108,13 +125,14 @@ int RegisterEvent(const std::string& name, TimedCallback callback)
 void UnregisterAllEvents()
 {
 	if (first)
-		PanicAlertT("Cannot unregister events with events pending");
+		PanicAlert("Cannot unregister events with events pending");
 	event_types.clear();
 }
 
 void Init()
 {
-	PowerPC::ppcState.downcount = maxSliceLength;
+	lastOCFactor = SConfig::GetInstance().m_OCEnable ? SConfig::GetInstance().m_OCFactor : 1.0f;
+	PowerPC::ppcState.downcount = CyclesToDowncount(maxSliceLength);
 	slicelength = maxSliceLength;
 	globalTimer = 0;
 	idledCycles = 0;
@@ -181,6 +199,7 @@ void DoState(PointerWrap &p)
 	p.Do(fakeDecStartTicks);
 	p.Do(fakeTBStartValue);
 	p.Do(fakeTBStartTicks);
+	p.Do(lastOCFactor);
 	p.DoMarker("CoreTimingData");
 
 	MoveEvents();
@@ -203,6 +222,13 @@ u64 GetIdleTicks()
 // schedule things to be executed on the main thread.
 void ScheduleEvent_Threadsafe(int cyclesIntoFuture, int event_type, u64 userdata)
 {
+	_assert_msg_(POWERPC, !Core::IsCPUThread(), "ScheduleEvent_Threadsafe from wrong thread");
+	if (Core::g_want_determinism)
+	{
+		ERROR_LOG(POWERPC, "Someone scheduled an off-thread \"%s\" event while netplay or movie play/record "
+		                   "was active.  This is likely to cause a desync.",
+		                   event_types[event_type].name.c_str());
+	}
 	std::lock_guard<std::mutex> lk(tsWriteLock);
 	Event ne;
 	ne.time = globalTimer + cyclesIntoFuture;
@@ -211,8 +237,15 @@ void ScheduleEvent_Threadsafe(int cyclesIntoFuture, int event_type, u64 userdata
 	tsQueue.Push(ne);
 }
 
+// Executes an event immediately, then returns.
+void ScheduleEvent_Immediate(int event_type, u64 userdata)
+{
+	_assert_msg_(POWERPC, Core::IsCPUThread(), "ScheduleEvent_Immediate from wrong thread");
+	event_types[event_type].callback(userdata, 0);
+}
+
 // Same as ScheduleEvent_Threadsafe(0, ...) EXCEPT if we are already on the CPU thread
-// in which case the event will get handled immediately, before returning.
+// in which case this is the same as ScheduleEvent_Immediate.
 void ScheduleEvent_Threadsafe_Immediate(int event_type, u64 userdata)
 {
 	if (Core::IsCPUThread())
@@ -253,11 +286,13 @@ static void AddEventToQueue(Event* ne)
 	}
 }
 
-// This must be run ONLY from within the cpu thread
+// This must be run ONLY from within the CPU thread
 // cyclesIntoFuture may be VERY inaccurate if called from anything else
 // than Advance
 void ScheduleEvent(int cyclesIntoFuture, int event_type, u64 userdata)
 {
+	_assert_msg_(POWERPC, Core::IsCPUThread() || Core::GetState() == Core::CORE_PAUSE,
+				 "ScheduleEvent from wrong thread");
 	Event *ne = GetNewEvent();
 	ne->userdata = userdata;
 	ne->type = event_type;
@@ -265,41 +300,13 @@ void ScheduleEvent(int cyclesIntoFuture, int event_type, u64 userdata)
 	AddEventToQueue(ne);
 }
 
-void RegisterAdvanceCallback(void (*callback)(int cyclesExecuted))
-{
-	advanceCallback = callback;
-}
-
-bool IsScheduled(int event_type)
-{
-	if (!first)
-		return false;
-	Event *e = first;
-	while (e) {
-		if (e->type == event_type)
-			return true;
-		e = e->next;
-	}
-	return false;
-}
-
 void RemoveEvent(int event_type)
 {
-	if (!first)
-		return;
-
-	while (first)
+	while (first && first->type == event_type)
 	{
-		if (first->type == event_type)
-		{
-			Event *next = first->next;
-			FreeEvent(first);
-			first = next;
-		}
-		else
-		{
-			break;
-		}
+		Event* next = first->next;
+		FreeEvent(first);
+		first = next;
 	}
 
 	if (!first)
@@ -329,23 +336,13 @@ void RemoveAllEvents(int event_type)
 	RemoveEvent(event_type);
 }
 
-void SetMaximumSlice(int maximumSliceLength)
-{
-	maxSliceLength = maximumSliceLength;
-}
-
 void ForceExceptionCheck(int cycles)
 {
-	if (PowerPC::ppcState.downcount > cycles)
+	if (DowncountToCycles(PowerPC::ppcState.downcount) > cycles)
 	{
-		slicelength -= (PowerPC::ppcState.downcount - cycles); // Account for cycles already executed by adjusting the slicelength
-		PowerPC::ppcState.downcount = cycles;
+		slicelength -= (DowncountToCycles(PowerPC::ppcState.downcount) - cycles); // Account for cycles already executed by adjusting the slicelength
+		PowerPC::ppcState.downcount = CyclesToDowncount(cycles);
 	}
-}
-
-void ResetSliceLength()
-{
-	maxSliceLength = MAX_SLICE_LENGTH;
 }
 
 
@@ -390,42 +387,33 @@ void Advance()
 {
 	MoveEvents();
 
-	int cyclesExecuted = slicelength - PowerPC::ppcState.downcount;
+	int cyclesExecuted = slicelength - DowncountToCycles(PowerPC::ppcState.downcount);
 	globalTimer += cyclesExecuted;
-	PowerPC::ppcState.downcount = slicelength;
+	lastOCFactor = SConfig::GetInstance().m_OCEnable ? SConfig::GetInstance().m_OCFactor : 1.0f;
+	PowerPC::ppcState.downcount = CyclesToDowncount(slicelength);
 
-	while (first)
+	while (first && first->time <= globalTimer)
 	{
-		if (first->time <= globalTimer)
-		{
-			//LOG(POWERPC, "[Scheduler] %s     (%lld, %lld) ",
-			//             event_types[first->type].name ? event_types[first->type].name : "?", (u64)globalTimer, (u64)first->time);
-			Event* evt = first;
-			first = first->next;
-			event_types[evt->type].callback(evt->userdata, (int)(globalTimer - evt->time));
-			FreeEvent(evt);
-		}
-		else
-		{
-			break;
-		}
+		//LOG(POWERPC, "[Scheduler] %s     (%lld, %lld) ",
+		//             event_types[first->type].name ? event_types[first->type].name : "?", (u64)globalTimer, (u64)first->time);
+		Event* evt = first;
+		first = first->next;
+		event_types[evt->type].callback(evt->userdata, (int)(globalTimer - evt->time));
+		FreeEvent(evt);
 	}
 
 	if (!first)
 	{
 		WARN_LOG(POWERPC, "WARNING - no events in queue. Setting downcount to 10000");
-		PowerPC::ppcState.downcount += 10000;
+		PowerPC::ppcState.downcount += CyclesToDowncount(10000);
 	}
 	else
 	{
 		slicelength = (int)(first->time - globalTimer);
 		if (slicelength > maxSliceLength)
 			slicelength = maxSliceLength;
-		PowerPC::ppcState.downcount = slicelength;
+		PowerPC::ppcState.downcount = CyclesToDowncount(slicelength);
 	}
-
-	if (advanceCallback)
-		advanceCallback(cyclesExecuted);
 }
 
 void LogPendingEvents()
@@ -442,19 +430,17 @@ void Idle()
 {
 	//DEBUG_LOG(POWERPC, "Idle");
 
-	//When the FIFO is processing data we must not advance because in this way
-	//the VI will be desynchronized. So, We are waiting until the FIFO finish and
-	//while we process only the events required by the FIFO.
-	while (g_video_backend->Video_IsPossibleWaitingSetDrawDone())
+	if (SConfig::GetInstance().bSyncGPUOnSkipIdleHack)
 	{
+		//When the FIFO is processing data we must not advance because in this way
+		//the VI will be desynchronized. So, We are waiting until the FIFO finish and
+		//while we process only the events required by the FIFO.
 		ProcessFifoWaitEvents();
-		Common::YieldCPU();
+		g_video_backend->Video_Sync(0);
 	}
 
-	idledCycles += PowerPC::ppcState.downcount;
+	idledCycles += DowncountToCycles(PowerPC::ppcState.downcount);
 	PowerPC::ppcState.downcount = 0;
-
-	Advance();
 }
 
 std::string GetScheduledEventsSummary()

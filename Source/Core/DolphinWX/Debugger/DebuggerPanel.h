@@ -1,28 +1,20 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include <wx/defs.h>
-#include <wx/event.h>
-#include <wx/gdicmn.h>
 #include <wx/panel.h>
-#include <wx/string.h>
-#include <wx/translation.h>
-#include <wx/windowid.h>
-
 #include "VideoCommon/Debugger.h"
 
 class wxButton;
 class wxChoice;
 class wxTextCtrl;
-class wxWindow;
 
 class GFXDebuggerPanel : public wxPanel, public GFXDebuggerBase
 {
 public:
-	GFXDebuggerPanel(wxWindow *parent,
+	GFXDebuggerPanel(wxWindow* parent,
 		wxWindowID id = wxID_ANY,
 		const wxPoint& pos = wxDefaultPosition,
 		const wxSize& size = wxDefaultSize,
@@ -46,10 +38,6 @@ public:
 	void OnContinue() override;
 
 private:
-	DECLARE_EVENT_TABLE();
-
-	wxPanel*    m_MainPanel;
-
 	wxButton*   m_pButtonPause;
 	wxButton*   m_pButtonPauseAtNext;
 	wxButton*   m_pButtonPauseAtNextFrame;
@@ -63,26 +51,6 @@ private:
 	wxButton*   m_pButtonClearVertexShaderCache;
 	wxButton*   m_pButtonClearPixelShaderCache;
 	wxTextCtrl* m_pCount;
-
-
-	// TODO: Prefix with GFX_
-	enum
-	{
-		ID_MAINPANEL = 3900,
-		ID_CONT,
-		ID_PAUSE,
-		ID_PAUSE_AT_NEXT,
-		ID_PAUSE_AT_NEXT_FRAME,
-		ID_PAUSE_AT_LIST,
-		ID_DUMP,
-		ID_DUMP_LIST,
-		ID_UPDATE_SCREEN,
-		ID_CLEAR_SCREEN,
-		ID_CLEAR_TEXTURE_CACHE,
-		ID_CLEAR_VERTEX_SHADER_CACHE,
-		ID_CLEAR_PIXEL_SHADER_CACHE,
-		ID_COUNT
-	};
 
 	void OnClose(wxCloseEvent& event);
 	void CreateGUIControls();
@@ -104,5 +72,4 @@ private:
 	void OnClearTextureCacheButton(wxCommandEvent& event);
 	void OnClearVertexShaderCacheButton(wxCommandEvent& event);
 	void OnClearPixelShaderCacheButton(wxCommandEvent& event);
-	void OnCountEnter(wxCommandEvent& event);
 };

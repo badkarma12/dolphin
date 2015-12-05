@@ -1,24 +1,14 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cstddef>
-#include <wx/defs.h>
-#include <wx/event.h>
-#include <wx/gdicmn.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
-#include <wx/string.h>
-#include <wx/windowid.h>
 
+#include "Core/PowerPC/PowerPC.h"
 #include "DolphinWX/Debugger/RegisterView.h"
 #include "DolphinWX/Debugger/RegisterWindow.h"
-
-class wxWindow;
-
-BEGIN_EVENT_TABLE(CRegisterWindow, wxPanel)
-END_EVENT_TABLE()
-
 
 CRegisterWindow::CRegisterWindow(wxWindow* parent, wxWindowID id,
 		const wxPoint& position, const wxSize& size,
@@ -32,7 +22,7 @@ CRegisterWindow::CRegisterWindow(wxWindow* parent, wxWindowID id,
 void CRegisterWindow::CreateGUIControls()
 {
 	wxBoxSizer *sGrid = new wxBoxSizer(wxVERTICAL);
-	m_GPRGridView = new CRegisterView(this, ID_GPR);
+	m_GPRGridView = new CRegisterView(this);
 	sGrid->Add(m_GPRGridView, 1, wxGROW);
 	SetSizer(sGrid);
 

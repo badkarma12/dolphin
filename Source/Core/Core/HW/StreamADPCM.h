@@ -1,22 +1,23 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 // Adapted from in_cube by hcs & destop
 
 #pragma once
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
-class NGCADPCM
+namespace StreamADPCM
 {
-public:
-	enum
-	{
-		ONE_BLOCK_SIZE = 32,
-		SAMPLES_PER_BLOCK = 28
-	};
 
-	static void InitFilter();
-	static void DecodeBlock(s16 *pcm, const u8 *adpcm);
+enum
+{
+	ONE_BLOCK_SIZE = 32,
+	SAMPLES_PER_BLOCK = 28
 };
+
+void InitFilter();
+void DecodeBlock(s16* pcm, const u8* adpcm);
+
+}

@@ -1,5 +1,5 @@
 // Copyright 2014 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 // Multithreaded event class. This allows waiting in a thread for an event to
@@ -16,15 +16,14 @@
 #include <concrt.h>
 #endif
 
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+
 #include "Common/Flag.h"
-#include "Common/StdConditionVariable.h"
-#include "Common/StdMutex.h"
 
 namespace Common {
 
-// Windows uses a specific implementation because std::condition_variable has
-// terrible performance for this kind of workload with MSVC++ 2013.
-#ifndef _WIN32
 class Event final
 {
 public:
@@ -47,6 +46,20 @@ public:
 		m_flag.Clear();
 	}
 
+	template<class Rep, class Period>
+	bool WaitFor(const std::chrono::duration<Rep, Period>& rel_time)
+	{
+		if (m_flag.TestAndClear())
+			return true;
+
+		std::unique_lock<std::mutex> lk(m_mutex);
+		bool signaled = m_condvar.wait_for(lk, rel_time,
+			[&]{ return m_flag.IsSet(); });
+		m_flag.Clear();
+
+		return signaled;
+	}
+
 	void Reset()
 	{
 		// no other action required, since wait loops on
@@ -60,17 +73,5 @@ private:
 	std::condition_variable m_condvar;
 	std::mutex m_mutex;
 };
-#else
-class Event final
-{
-public:
-	void Set() { m_event.set(); }
-	void Wait() { m_event.wait(); m_event.reset(); }
-	void Reset() { m_event.reset(); }
-
-private:
-	concurrency::event m_event;
-};
-#endif
 
 }  // namespace Common

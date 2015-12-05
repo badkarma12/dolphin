@@ -1,17 +1,18 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <string>
 
 #include "Common/StringUtil.h"
+#include "Common/Logging/Log.h"
 #include "Core/HW/SI_Device.h"
 #include "Core/HW/SI_DeviceAMBaseboard.h"
 #include "Core/HW/SI_DeviceDanceMat.h"
 #include "Core/HW/SI_DeviceGBA.h"
 #include "Core/HW/SI_DeviceGCController.h"
 #include "Core/HW/SI_DeviceGCSteeringWheel.h"
-
+#include "Core/HW/SI_DeviceKeyboard.h"
 
 // --- interface ISIDevice ---
 int ISIDevice::RunBuffer(u8* _pBuffer, int _iLength)
@@ -37,8 +38,12 @@ int ISIDevice::RunBuffer(u8* _pBuffer, int _iLength)
 	DEBUG_LOG(SERIALINTERFACE, "%s", temp.c_str());
 #endif
 	return 0;
-};
+}
 
+int ISIDevice::TransferInterval()
+{
+	return 0;
+}
 
 // Stub class for saying nothing is attached, and not having to deal with null pointers :)
 class CSIDevice_Null : public ISIDevice
@@ -82,6 +87,10 @@ ISIDevice* SIDevice_Create(const SIDevices device, const int port_number)
 
 	case SIDEVICE_GC_GBA:
 		return new CSIDevice_GBA(device, port_number);
+		break;
+
+	case SIDEVICE_GC_KEYBOARD:
+		return new CSIDevice_Keyboard(device, port_number);
 		break;
 
 	case SIDEVICE_AM_BASEBOARD:

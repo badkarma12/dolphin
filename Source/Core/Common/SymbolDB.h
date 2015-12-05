@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 // This file contains a generic symbol map implementation. For CPU-specific
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 struct SCall
 {

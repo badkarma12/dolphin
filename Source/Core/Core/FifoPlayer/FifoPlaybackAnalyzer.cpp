@@ -1,18 +1,16 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
-
+#include "Common/Assert.h"
+#include "Common/CommonTypes.h"
 #include "Core/FifoPlayer/FifoAnalyzer.h"
 #include "Core/FifoPlayer/FifoDataFile.h"
 #include "Core/FifoPlayer/FifoPlaybackAnalyzer.h"
-
 #include "VideoCommon/OpcodeDecoding.h"
 #include "VideoCommon/TextureDecoder.h"
 #include "VideoCommon/VertexLoader.h"
 
-using namespace std;
 using namespace FifoAnalyzer;
 
 // For debugging
@@ -21,7 +19,7 @@ struct CmdData
 {
 	u32 size;
 	u32 offset;
-	u8 *ptr;
+	u8* ptr;
 };
 
 FifoPlaybackAnalyzer::FifoPlaybackAnalyzer()
@@ -29,13 +27,13 @@ FifoPlaybackAnalyzer::FifoPlaybackAnalyzer()
 	FifoAnalyzer::Init();
 }
 
-void FifoPlaybackAnalyzer::AnalyzeFrames(FifoDataFile *file, std::vector<AnalyzedFrameInfo> &frameInfo)
+void FifoPlaybackAnalyzer::AnalyzeFrames(FifoDataFile* file, std::vector<AnalyzedFrameInfo>& frameInfo)
 {
 	// Load BP memory
-	u32 *bpMem = file->GetBPMem();
+	u32* bpMem = file->GetBPMem();
 	memcpy(&m_BpMem, bpMem, sizeof(BPMemory));
 
-	u32 *cpMem = file->GetCPMem();
+	u32* cpMem = file->GetCPMem();
 	FifoAnalyzer::LoadCPReg(0x50, cpMem[0x50], m_CpMem);
 	FifoAnalyzer::LoadCPReg(0x60, cpMem[0x60], m_CpMem);
 
@@ -49,7 +47,7 @@ void FifoPlaybackAnalyzer::AnalyzeFrames(FifoDataFile *file, std::vector<Analyze
 	frameInfo.clear();
 	frameInfo.resize(file->GetFrameCount());
 
-	for (size_t frameIdx = 0; frameIdx < file->GetFrameCount(); ++frameIdx)
+	for (u32 frameIdx = 0; frameIdx < file->GetFrameCount(); ++frameIdx)
 	{
 		const FifoFrameInfo& frame = file->GetFrame(frameIdx);
 		AnalyzedFrameInfo& analyzed = frameInfo[frameIdx];
@@ -111,7 +109,7 @@ void FifoPlaybackAnalyzer::AnalyzeFrames(FifoDataFile *file, std::vector<Analyze
 	}
 }
 
-void FifoPlaybackAnalyzer::AddMemoryUpdate(MemoryUpdate memUpdate, AnalyzedFrameInfo &frameInfo)
+void FifoPlaybackAnalyzer::AddMemoryUpdate(MemoryUpdate memUpdate, AnalyzedFrameInfo& frameInfo)
 {
 	u32 begin = memUpdate.address;
 	u32 end = memUpdate.address + memUpdate.size;
@@ -153,9 +151,9 @@ void FifoPlaybackAnalyzer::AddMemoryUpdate(MemoryUpdate memUpdate, AnalyzedFrame
 	frameInfo.memoryUpdates.push_back(memUpdate);
 }
 
-u32 FifoPlaybackAnalyzer::DecodeCommand(u8 *data)
+u32 FifoPlaybackAnalyzer::DecodeCommand(u8* data)
 {
-	u8 *dataStart = data;
+	u8* dataStart = data;
 
 	int cmd = ReadFifo8(data);
 
@@ -291,10 +289,10 @@ void FifoPlaybackAnalyzer::StoreEfbCopyRegion()
 void FifoPlaybackAnalyzer::StoreWrittenRegion(u32 address, u32 size)
 {
 	u32 end = address + size;
-	vector<MemoryRange>::iterator newRangeIter = m_WrittenMemory.end();
+	auto newRangeIter = m_WrittenMemory.end();
 
 	// Search for overlapping memory regions and expand them to include the new region
-	for (vector<MemoryRange>::iterator iter = m_WrittenMemory.begin(); iter != m_WrittenMemory.end();)
+	for (auto iter = m_WrittenMemory.begin(); iter != m_WrittenMemory.end();)
 	{
 		MemoryRange &range = *iter;
 

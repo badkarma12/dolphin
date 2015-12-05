@@ -1,35 +1,28 @@
 set(SRCS BPMemLoader.cpp
-	   Clipper.cpp
-	   SWCommandProcessor.cpp
 	   CPMemLoader.cpp
+	   Clipper.cpp
 	   DebugUtil.cpp
 	   EfbCopy.cpp
 	   EfbInterface.cpp
-	   HwRasterizer.cpp
-	   SWmain.cpp
 	   OpcodeDecoder.cpp
-	   RasterFont.cpp
 	   Rasterizer.cpp
+	   SWCommandProcessor.cpp
+	   SWOGLWindow.cpp
 	   SWRenderer.cpp
-	   SetupUnit.cpp
 	   SWStatistics.cpp
+	   SWVertexLoader.cpp
+	   SWVideoConfig.cpp
+	   SWmain.cpp
+	   SetupUnit.cpp
 	   Tev.cpp
 	   TextureEncoder.cpp
 	   TextureSampler.cpp
 	   TransformUnit.cpp
-	   SWVertexLoader.cpp
-	   SWVideoConfig.cpp
 	   XFMemLoader.cpp)
 
-if(wxWidgets_FOUND)
-	set(SRCS ${SRCS} VideoConfigDialog.cpp)
-endif(wxWidgets_FOUND)
-
-set(LIBS	videocommon
-			SOIL
-			common
-			${X11_LIBRARIES}
-			${OPENGL_LIBRARIES}
-			${wxWidgets_LIBRARIES})
+set(LIBS videocommon
+         SOIL
+         common
+         ${X11_LIBRARIES})
 
 add_dolphin_library(videosoftware "${SRCS}" "${LIBS}")

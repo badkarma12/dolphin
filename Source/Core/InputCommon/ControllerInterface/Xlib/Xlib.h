@@ -1,3 +1,7 @@
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
+
 #pragma once
 
 #include <X11/keysym.h>
@@ -70,8 +74,7 @@ private:
 	};
 
 public:
-	bool UpdateInput() override;
-	bool UpdateOutput() override;
+	void UpdateInput() override;
 
 	KeyboardMouse(Window window);
 	~KeyboardMouse();

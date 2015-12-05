@@ -1,15 +1,16 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
 #include <cstddef>
-#include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
+#include "Common/NandPaths.h"
 #include "DiscIO/Volume.h"
 
 namespace DiscIO
@@ -28,31 +29,31 @@ struct SNANDContent
 	u8* m_pData;
 };
 
-// pure virtual interface so just the NANDContentManager can create these files only
-class INANDContentLoader
+// Instances of this class must be created by CNANDContentManager
+class CNANDContentLoader final
 {
 public:
+	CNANDContentLoader(const std::string& _rName);
+	virtual ~CNANDContentLoader();
 
-	INANDContentLoader() {}
+	bool IsValid() const { return m_Valid; }
+	void RemoveTitle() const;
+	u64 GetTitleID() const  { return m_TitleID; }
+	u16 GetIosVersion() const { return m_IosVersion; }
+	u32 GetBootIndex() const  { return m_BootIndex; }
+	size_t GetContentSize() const { return m_Content.size(); }
+	const SNANDContent* GetContentByIndex(int _Index) const;
+	const u8* GetTMDView() const { return m_TMDView; }
+	const u8* GetTMDHeader() const { return m_TMDHeader; }
+	u32 GetTIKSize() const { return m_TIKSize; }
+	const u8* GetTIK() const { return m_TIK; }
 
-	virtual ~INANDContentLoader()  {}
+	const std::vector<SNANDContent>& GetContent() const { return m_Content; }
 
-	virtual bool IsValid() const = 0;
-	virtual void RemoveTitle() const = 0;
-	virtual u64 GetTitleID() const = 0;
-	virtual u16 GetIosVersion() const = 0;
-	virtual u32 GetBootIndex() const = 0;
-	virtual size_t GetContentSize() const = 0;
-	virtual const SNANDContent* GetContentByIndex(int _Index) const = 0;
-	virtual const u8* GetTMDView() const = 0;
-	virtual const u8* GetTMDHeader() const = 0;
-	virtual u32 GetTIKSize() const = 0;
-	virtual const u8* GetTIK() const = 0;
-	virtual const std::vector<SNANDContent>& GetContent() const = 0;
-	virtual u16 GetTitleVersion() const = 0;
-	virtual u16 GetNumEntries() const = 0;
-	virtual DiscIO::IVolume::ECountry GetCountry() const = 0;
-	virtual u8 GetCountryChar() const = 0;
+	u16 GetTitleVersion() const {return m_TitleVersion;}
+	u16 GetNumEntries() const {return m_numEntries;}
+	DiscIO::IVolume::ECountry GetCountry() const;
+	u8 GetCountryChar() const {return m_Country; }
 
 	enum
 	{
@@ -61,34 +62,59 @@ public:
 		CONTENT_HEADER_SIZE = 0x24,
 		TICKET_SIZE         = 0x2A4
 	};
+
+private:
+	bool m_Valid;
+	bool m_isWAD;
+	std::string m_Path;
+	u64 m_TitleID;
+	u16 m_IosVersion;
+	u32 m_BootIndex;
+	u16 m_numEntries;
+	u16 m_TitleVersion;
+	u8 m_TMDView[TMD_VIEW_SIZE];
+	u8 m_TMDHeader[TMD_HEADER_SIZE];
+	u32 m_TIKSize;
+	u8* m_TIK;
+	u8 m_Country;
+
+	std::vector<SNANDContent> m_Content;
+
+
+	bool Initialize(const std::string& _rName);
+
+	void AESDecode(u8* _pKey, u8* _IV, u8* _pSrc, u32 _Size, u8* _pDest);
+
+	void GetKeyFromTicket(u8* pTicket, u8* pTicketKey);
 };
 
 
-// we open the NAND Content files to often... lets cache them
+// we open the NAND Content files too often... let's cache them
 class CNANDContentManager
 {
 public:
-	static CNANDContentManager& Access() { return m_Instance; }
-	u64 Install_WiiWAD(std::string &fileName);
+	static CNANDContentManager& Access() { static CNANDContentManager instance; return instance; }
+	u64 Install_WiiWAD(const std::string& fileName);
 
-	const INANDContentLoader& GetNANDLoader(const std::string& _rName, bool forceReload = false);
-	const INANDContentLoader& GetNANDLoader(u64 _titleId, bool forceReload = false);
-	bool RemoveTitle(u64 _titleID);
+	const CNANDContentLoader& GetNANDLoader(const std::string& content_path);
+	const CNANDContentLoader& GetNANDLoader(u64 title_id, Common::FromWhichRoot from);
+	bool RemoveTitle(u64 titl_id, Common::FromWhichRoot from);
+	void ClearCache();
 
 private:
-	CNANDContentManager() {};
+	CNANDContentManager() {}
 	~CNANDContentManager();
 
-	static CNANDContentManager m_Instance;
+	CNANDContentManager(CNANDContentManager const&) = delete;
+	void operator=(CNANDContentManager const&) = delete;
 
-	typedef std::map<std::string, INANDContentLoader*> CNANDContentMap;
-	CNANDContentMap m_Map;
+	std::unordered_map<std::string, std::unique_ptr<CNANDContentLoader>> m_map;
 };
 
 class CSharedContent
 {
 public:
-	static CSharedContent& AccessInstance() { return m_Instance; }
+	static CSharedContent& AccessInstance() { static CSharedContent instance; return instance; }
 
 	std::string GetFilenameFromSHA1(const u8* _pHash);
 	std::string AddSharedContent(const u8* _pHash);
@@ -98,6 +124,9 @@ private:
 	CSharedContent();
 	virtual ~CSharedContent();
 
+	CSharedContent(CSharedContent const&) = delete;
+	void operator=(CSharedContent const&) = delete;
+
 #pragma pack(push,1)
 	struct SElement
 	{
@@ -106,16 +135,15 @@ private:
 	};
 #pragma pack(pop)
 
-	u32 lastID;
-	std::string contentMap;
+	u32 m_lastID;
+	std::string m_contentMap;
 	std::vector<SElement> m_Elements;
-	static CSharedContent m_Instance;
 };
 
 class cUIDsys
 {
 public:
-	static cUIDsys& AccessInstance() { return m_Instance; }
+	static cUIDsys& AccessInstance() { static cUIDsys instance; return instance; }
 
 	u32 GetUIDFromTitle(u64 _Title);
 	void AddTitle(u64 _Title);
@@ -126,6 +154,9 @@ private:
 	cUIDsys();
 	virtual ~cUIDsys();
 
+	cUIDsys(cUIDsys const&) = delete;
+	void operator=(cUIDsys const&) = delete;
+
 #pragma pack(push,1)
 	struct SElement
 	{
@@ -134,10 +165,9 @@ private:
 	};
 #pragma pack(pop)
 
-	u32 lastUID;
-	std::string uidSys;
+	u32 m_lastUID;
+	std::string m_uidSys;
 	std::vector<SElement> m_Elements;
-	static cUIDsys m_Instance;
 };
 
 }

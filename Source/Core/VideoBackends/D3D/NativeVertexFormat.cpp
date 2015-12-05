@@ -1,9 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/D3DBlob.h"
+#include "VideoBackends/D3D/D3DState.h"
 #include "VideoBackends/D3D/VertexManager.h"
 #include "VideoBackends/D3D/VertexShaderCache.h"
 #include "VideoCommon/NativeVertexFormat.h"
@@ -19,16 +20,15 @@ class D3DVertexFormat : public NativeVertexFormat
 	ID3D11InputLayout* m_layout;
 
 public:
-	D3DVertexFormat() : m_num_elems(0), m_layout(nullptr) {}
+	D3DVertexFormat(const PortableVertexDeclaration& vtx_decl);
 	~D3DVertexFormat() { SAFE_RELEASE(m_layout); }
 
-	void Initialize(const PortableVertexDeclaration &_vtx_decl);
 	void SetupVertexPointers();
 };
 
-NativeVertexFormat* VertexManager::CreateNativeVertexFormat()
+NativeVertexFormat* VertexManager::CreateNativeVertexFormat(const PortableVertexDeclaration& vtx_decl)
 {
-	return new D3DVertexFormat();
+	return new D3DVertexFormat(vtx_decl);
 }
 
 static const DXGI_FORMAT d3d_format_lookup[5*4*2] =
@@ -56,9 +56,10 @@ DXGI_FORMAT VarToD3D(VarType t, int size, bool integer)
 	return retval;
 }
 
-void D3DVertexFormat::Initialize(const PortableVertexDeclaration &_vtx_decl)
+D3DVertexFormat::D3DVertexFormat(const PortableVertexDeclaration& _vtx_decl)
+ : m_num_elems(0), m_layout(nullptr)
 {
-	vertex_stride = _vtx_decl.stride;
+	this->vtx_decl = _vtx_decl;
 	memset(m_elems, 0, sizeof(m_elems));
 	const AttributeFormat* format = &_vtx_decl.position;
 
@@ -137,7 +138,7 @@ void D3DVertexFormat::SetupVertexPointers()
 		if (FAILED(hr)) PanicAlert("Failed to create input layout, %s %d\n", __FILE__, __LINE__);
 		DX11::D3D::SetDebugObjectName((ID3D11DeviceChild*)m_layout, "input layout used to emulate the GX pipeline");
 	}
-	DX11::D3D::context->IASetInputLayout(m_layout);
+	DX11::D3D::stateman->SetInputLayout(m_layout);
 }
 
 } // namespace DX11

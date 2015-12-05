@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <string>
@@ -13,8 +13,10 @@
 #include "Core/Core.h"
 #include "Core/Host.h"
 
+#include "VideoBackends/D3D/BoundingBox.h"
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/D3DUtil.h"
+#include "VideoBackends/D3D/GeometryShaderCache.h"
 #include "VideoBackends/D3D/Globals.h"
 #include "VideoBackends/D3D/PerfQuery.h"
 #include "VideoBackends/D3D/PixelShaderCache.h"
@@ -26,6 +28,7 @@
 #include "VideoCommon/BPStructs.h"
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/IndexGenerator.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/OpcodeDecoding.h"
@@ -51,12 +54,6 @@ unsigned int VideoBackend::PeekMessages()
 	return TRUE;
 }
 
-void VideoBackend::UpdateFPSDisplay(const std::string& text)
-{
-	std::string str = StringFromFormat("%s | D3D | %s", scm_rev_str, text.c_str());
-	SetWindowTextA((HWND)m_window_handle, str.c_str());
-}
-
 std::string VideoBackend::GetName() const
 {
 	return "D3D";
@@ -65,6 +62,11 @@ std::string VideoBackend::GetName() const
 std::string VideoBackend::GetDisplayName() const
 {
 	return "Direct3D";
+}
+
+std::string VideoBackend::GetConfigName() const
+{
+	return "gfx_dx11";
 }
 
 void InitBackendInfo()
@@ -78,12 +80,15 @@ void InitBackendInfo()
 	}
 
 	g_Config.backend_info.APIType = API_D3D;
-	g_Config.backend_info.bUseRGBATextures = true; // the GX formats barely match any D3D11 formats
-	g_Config.backend_info.bUseMinimalMipCount = true;
 	g_Config.backend_info.bSupportsExclusiveFullscreen = true;
 	g_Config.backend_info.bSupportsDualSourceBlend = true;
 	g_Config.backend_info.bSupportsPrimitiveRestart = true;
 	g_Config.backend_info.bSupportsOversizedViewports = false;
+	g_Config.backend_info.bSupportsGeometryShaders = true;
+	g_Config.backend_info.bSupports3DVision = true;
+	g_Config.backend_info.bSupportsPostProcessing = false;
+	g_Config.backend_info.bSupportsPaletteConversion = true;
+	g_Config.backend_info.bSupportsClipControl = true;
 
 	IDXGIFactory* factory;
 	IDXGIAdapter* ad;
@@ -106,30 +111,34 @@ void InitBackendInfo()
 		{
 			std::string samples;
 			std::vector<DXGI_SAMPLE_DESC> modes = DX11::D3D::EnumAAModes(ad);
+			// First iteration will be 1. This equals no AA.
 			for (unsigned int i = 0; i < modes.size(); ++i)
 			{
-				if (i == 0)
-					samples = _trans("None");
-				else if (modes[i].Quality)
-					samples = StringFromFormat(_trans("%d samples (quality level %d)"), modes[i].Count, modes[i].Quality);
-				else
-					samples = StringFromFormat(_trans("%d samples"), modes[i].Count);
-
-				g_Config.backend_info.AAModes.push_back(samples);
+				g_Config.backend_info.AAModes.push_back(modes[i].Count);
 			}
 
-			// Requires the earlydepthstencil attribute (only available in shader model 5)
-			g_Config.backend_info.bSupportsEarlyZ = (DX11::D3D::GetFeatureLevel(ad) == D3D_FEATURE_LEVEL_11_0);
-		}
+			bool shader_model_5_supported = (DX11::D3D::GetFeatureLevel(ad) >= D3D_FEATURE_LEVEL_11_0);
 
+			// Requires the earlydepthstencil attribute (only available in shader model 5)
+			g_Config.backend_info.bSupportsEarlyZ = shader_model_5_supported;
+
+			// Requires full UAV functionality (only available in shader model 5)
+			g_Config.backend_info.bSupportsBBox = shader_model_5_supported;
+
+			// Requires the instance attribute (only available in shader model 5)
+			g_Config.backend_info.bSupportsGSInstancing = shader_model_5_supported;
+
+			// Sample shading requires shader model 5
+			g_Config.backend_info.bSupportsSSAA = shader_model_5_supported;
+		}
 		g_Config.backend_info.Adapters.push_back(UTF16ToUTF8(desc.Description));
 		ad->Release();
 	}
-
 	factory->Release();
 
 	// Clear ppshaders string vector
 	g_Config.backend_info.PPShaders.clear();
+	g_Config.backend_info.AnaglyphShaders.clear();
 
 	DX11::D3D::UnloadDXGI();
 	DX11::D3D::UnloadD3D();
@@ -138,10 +147,10 @@ void InitBackendInfo()
 void VideoBackend::ShowConfig(void *hParent)
 {
 	InitBackendInfo();
-	Host_ShowVideoConfig(hParent, GetDisplayName(), "gfx_dx11");
+	Host_ShowVideoConfig(hParent, GetDisplayName(), GetConfigName());
 }
 
-bool VideoBackend::Initialize(void *&window_handle)
+bool VideoBackend::Initialize(void *window_handle)
 {
 	if (window_handle == nullptr)
 		return false;
@@ -151,7 +160,7 @@ bool VideoBackend::Initialize(void *&window_handle)
 
 	frameCount = 0;
 
-	g_Config.Load(File::GetUserPath(D_CONFIG_IDX) + "gfx_dx11.ini");
+	g_Config.Load(File::GetUserPath(D_CONFIG_IDX) + GetConfigName() + ".ini");
 	g_Config.GameIniLoad();
 	g_Config.UpdateProjectionHack();
 	g_Config.VerifyValidity();
@@ -166,11 +175,6 @@ bool VideoBackend::Initialize(void *&window_handle)
 
 void VideoBackend::Video_Prepare()
 {
-	// Better be safe...
-	s_efbAccessRequested = FALSE;
-	s_FifoShuttingDown = FALSE;
-	s_swapRequested = FALSE;
-
 	// internal interfaces
 	g_renderer = new Renderer(m_window_handle);
 	g_texture_cache = new TextureCache;
@@ -178,6 +182,7 @@ void VideoBackend::Video_Prepare()
 	g_perf_query = new PerfQuery;
 	VertexShaderCache::Init();
 	PixelShaderCache::Init();
+	GeometryShaderCache::Init();
 	D3D::InitUtils();
 
 	// VideoCommon
@@ -188,8 +193,10 @@ void VideoBackend::Video_Prepare()
 	OpcodeDecoder_Init();
 	VertexShaderManager::Init();
 	PixelShaderManager::Init();
+	GeometryShaderManager::Init();
 	CommandProcessor::Init();
 	PixelEngine::Init();
+	BBox::Init();
 
 	// Tell the host that the window is ready
 	Host_Message(WM_USER_CREATE);
@@ -202,13 +209,10 @@ void VideoBackend::Shutdown()
 	// TODO: should be in Video_Cleanup
 	if (g_renderer)
 	{
-		s_efbAccessRequested = FALSE;
-		s_FifoShuttingDown = FALSE;
-		s_swapRequested = FALSE;
-
 		// VideoCommon
 		Fifo_Shutdown();
 		CommandProcessor::Shutdown();
+		GeometryShaderManager::Shutdown();
 		PixelShaderManager::Shutdown();
 		VertexShaderManager::Shutdown();
 		OpcodeDecoder_Shutdown();
@@ -218,6 +222,9 @@ void VideoBackend::Shutdown()
 		D3D::ShutdownUtils();
 		PixelShaderCache::Shutdown();
 		VertexShaderCache::Shutdown();
+		GeometryShaderCache::Shutdown();
+		BBox::Shutdown();
+
 		delete g_perf_query;
 		delete g_vertex_manager;
 		delete g_texture_cache;
@@ -227,7 +234,8 @@ void VideoBackend::Shutdown()
 	}
 }
 
-void VideoBackend::Video_Cleanup() {
+void VideoBackend::Video_Cleanup()
+{
 }
 
 }

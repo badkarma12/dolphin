@@ -1,14 +1,14 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include "Common/Common.h"
-#include "Core/HW/SI_Device.h"
+#include "Common/CommonTypes.h"
 
 class PointerWrap;
 class ISIDevice;
+enum SIDevices : int;
 namespace MMIO { class Mapping; }
 
 // SI number of channels
@@ -35,6 +35,8 @@ void AddDevice(ISIDevice* pDevice);
 void ChangeDeviceCallback(u64 userdata, int cyclesLate);
 void ChangeDevice(SIDevices device, int channel);
 
+SIDevices GetDeviceType(int channel);
+
 int GetTicksToNextSIPoll();
 
-}; // end of namespace SerialInterface
+} // end of namespace SerialInterface

@@ -1,32 +1,23 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
-
-#ifdef _WIN32
-#define SLEEP(x) Sleep(x)
-#else
-#include <unistd.h>
-#define SLEEP(x) usleep(x*1000)
-#endif
 
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #endif
 
-#include <clocale>
 #include <cstddef>
-#include <type_traits>
+#include <string>
 #include "Common/CommonTypes.h"
 
 // Will fail to compile on a non-array:
-// TODO: make this a function when constexpr is available
-template <typename T>
-struct ArraySizeImpl : public std::extent<T>
-{ static_assert(std::is_array<T>::value, "is array"); };
-
-#define ArraySize(x) ArraySizeImpl<decltype(x)>::value
+template <typename T, size_t N>
+constexpr size_t ArraySize(T (&arr)[N])
+{
+	return N;
+}
 
 #define b2(x)   (   (x) | (   (x) >> 1) )
 #define b4(x)   ( b2(x) | ( b2(x) >> 2) )
@@ -34,24 +25,6 @@ struct ArraySizeImpl : public std::extent<T>
 #define b16(x)  ( b8(x) | ( b8(x) >> 8) )
 #define b32(x)  (b16(x) | (b16(x) >>16) )
 #define ROUND_UP_POW2(x)  (b32(x - 1) + 1)
-
-#ifndef __GNUC_PREREQ
-	#define __GNUC_PREREQ(a, b) 0
-#endif
-
-#if (defined __GNUC__ && !__GNUC_PREREQ(4,9)) && \
-    !defined __SSSE3__ && defined _M_X86
-#include <emmintrin.h>
-static __inline __m128i __attribute__((__always_inline__))
-_mm_shuffle_epi8(__m128i a, __m128i mask)
-{
-	__m128i result;
-	__asm__("pshufb %1, %0"
-		: "=x" (result)
-		: "xm" (mask), "0" (a));
-	return result;
-}
-#endif
 
 #ifndef _WIN32
 
@@ -63,36 +36,34 @@ _mm_shuffle_epi8(__m128i a, __m128i mask)
 #endif
 
 // go to debugger mode
-	#ifdef GEKKO
-		#define Crash()
-	#elif defined _M_X86
-		#define Crash() {asm ("int $3");}
-	#else
-		#define Crash() { exit(1); }
-	#endif
+#define Crash() { __builtin_trap(); }
 
 // GCC 4.8 defines all the rotate functions now
 // Small issue with GCC's lrotl/lrotr intrinsics is they are still 32bit while we require 64bit
 #ifndef _rotl
-inline u32 _rotl(u32 x, int shift) {
+inline u32 _rotl(u32 x, int shift)
+{
 	shift &= 31;
 	if (!shift) return x;
 	return (x << shift) | (x >> (32 - shift));
 }
 
-inline u32 _rotr(u32 x, int shift) {
+inline u32 _rotr(u32 x, int shift)
+{
 	shift &= 31;
 	if (!shift) return x;
 	return (x >> shift) | (x << (32 - shift));
 }
 #endif
 
-inline u64 _rotl64(u64 x, unsigned int shift){
+inline u64 _rotl64(u64 x, unsigned int shift)
+{
 	unsigned int n = shift % 64;
 	return (x << n) | (x >> (64 - n));
 }
 
-inline u64 _rotr64(u64 x, unsigned int shift){
+inline u64 _rotr64(u64 x, unsigned int shift)
+{
 	unsigned int n = shift % 64;
 	return (x >> n) | (x << (64 - n));
 }
@@ -102,49 +73,9 @@ inline u64 _rotr64(u64 x, unsigned int shift){
 	#define strcasecmp _stricmp
 	#define strncasecmp _strnicmp
 	#define unlink _unlink
-	#define snprintf _snprintf
 	#define vscprintf _vscprintf
 
-// Locale Cross-Compatibility
-	#define locale_t _locale_t
-	#define freelocale _free_locale
-	#define newlocale(mask, locale, base) _create_locale(mask, locale)
-
-	#define LC_GLOBAL_LOCALE    ((locale_t)-1)
-	#define LC_ALL_MASK         LC_ALL
-	#define LC_COLLATE_MASK     LC_COLLATE
-	#define LC_CTYPE_MASK       LC_CTYPE
-	#define LC_MONETARY_MASK    LC_MONETARY
-	#define LC_NUMERIC_MASK     LC_NUMERIC
-	#define LC_TIME_MASK        LC_TIME
-
-	inline locale_t uselocale(locale_t new_locale)
-	{
-		// Retrieve the current per thread locale setting
-		bool bIsPerThread = (_configthreadlocale(0) == _ENABLE_PER_THREAD_LOCALE);
-
-		// Retrieve the current thread-specific locale
-		locale_t old_locale = bIsPerThread ? _get_current_locale() : LC_GLOBAL_LOCALE;
-
-		if (new_locale == LC_GLOBAL_LOCALE)
-		{
-			// Restore the global locale
-			_configthreadlocale(_DISABLE_PER_THREAD_LOCALE);
-		}
-		else if (new_locale != nullptr)
-		{
-			// Configure the thread to set the locale only for this thread
-			_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
-
-			// Set all locale categories
-			for (int i = LC_MIN; i <= LC_MAX; i++)
-				setlocale(i, new_locale->locinfo->lc_category[i].locale);
-		}
-
-		return old_locale;
-	}
-
-// 64 bit offsets for windows
+// 64 bit offsets for Windows
 	#define fseeko _fseeki64
 	#define ftello _ftelli64
 	#define atoll _atoi64
@@ -163,7 +94,7 @@ extern "C"
 // Call directly after the command or use the error num.
 // This function might change the error code.
 // Defined in Misc.cpp.
-const char* GetLastErrorMsg();
+std::string GetLastErrorMsg();
 
 namespace Common
 {
@@ -180,11 +111,9 @@ inline u32 swap24(const u8* _data) {return (_data[0] << 16) | (_data[1] << 8) | 
 inline u16 swap16(u16 _data) {return _byteswap_ushort(_data);}
 inline u32 swap32(u32 _data) {return _byteswap_ulong (_data);}
 inline u64 swap64(u64 _data) {return _byteswap_uint64(_data);}
-#elif _M_ARM_32
-inline u16 swap16 (u16 _data) { u32 data = _data; __asm__ ("rev16 %0, %1\n" : "=l" (data) : "l" (data)); return (u16)data;}
-inline u32 swap32 (u32 _data) {__asm__ ("rev %0, %1\n" : "=l" (_data) : "l" (_data)); return _data;}
-inline u64 swap64(u64 _data) {return ((u64)swap32(_data) << 32) | swap32(_data >> 32);}
-#elif __linux__
+#elif __linux__ && !(ANDROID && _M_ARM_64)
+// Android NDK r10c has broken builtin byte swap routines
+// Disabled for now.
 inline u16 swap16(u16 _data) {return bswap_16(_data);}
 inline u32 swap32(u32 _data) {return bswap_32(_data);}
 inline u64 swap64(u64 _data) {return bswap_64(_data);}
@@ -238,7 +167,7 @@ inline void swap<8>(u8* data)
 template <typename T>
 inline T FromBigEndian(T data)
 {
-	//static_assert(std::is_arithmetic<T>::value, "function only makes sense with arithmetic types");
+	static_assert(std::is_arithmetic<T>::value, "function only makes sense with arithmetic types");
 
 	swap<sizeof(data)>(reinterpret_cast<u8*>(&data));
 	return data;

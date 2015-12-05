@@ -1,7 +1,9 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Common/Common.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/HW/WiimoteEmu/Attachment/Guitar.h"
 
 namespace WiimoteEmu
@@ -53,7 +55,7 @@ Guitar::Guitar(WiimoteEmu::ExtensionReg& _reg) : Attachment(_trans("Guitar"), _r
 	m_buttons->controls.emplace_back(new ControlGroup::Input("+"));
 
 	// stick
-	groups.emplace_back(m_stick = new AnalogStick(_trans("Stick")));
+	groups.emplace_back(m_stick = new AnalogStick(_trans("Stick"), DEFAULT_ATTACHMENT_STICK_RADIUS));
 
 	// whammy
 	groups.emplace_back(m_whammy = new Triggers(_trans("Whammy")));
@@ -73,20 +75,20 @@ void Guitar::GetState(u8* const data)
 
 	// stick
 	{
-	double x, y;
+	ControlState x, y;
 	m_stick->GetState(&x, &y);
 
-	gdata->sx = (x * 0x1F) + 0x20;
-	gdata->sy = (y * 0x1F) + 0x20;
+	gdata->sx = static_cast<u8>((x * 0x1F) + 0x20);
+	gdata->sy = static_cast<u8>((y * 0x1F) + 0x20);
 	}
 
 	// TODO: touch bar, probably not
 	gdata->tb = 0x0F; // not touched
 
 	// whammy bar
-	double whammy;
+	ControlState whammy;
 	m_whammy->GetState(&whammy);
-	gdata->whammy = whammy * 0x1F;
+	gdata->whammy = static_cast<u8>(whammy * 0x1F);
 
 	// buttons
 	m_buttons->GetState(&gdata->bt, guitar_button_bitmasks);
@@ -97,6 +99,15 @@ void Guitar::GetState(u8* const data)
 
 	// flip button bits
 	gdata->bt ^= 0xFFFF;
+}
+
+bool Guitar::IsButtonPressed() const
+{
+	u16 buttons = 0;
+	m_buttons->GetState(&buttons, guitar_button_bitmasks);
+	m_frets->GetState(&buttons, guitar_fret_bitmasks);
+	m_strum->GetState(&buttons, guitar_strum_bitmasks);
+	return buttons != 0;
 }
 
 }

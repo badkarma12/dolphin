@@ -1,5 +1,5 @@
 // Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -7,10 +7,10 @@
 #include <string>
 #include <vector>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 // idk in case I wanted to change it to double or something, idk what's best
-typedef float ControlState;
+typedef double ControlState;
 
 namespace ciface
 {
@@ -61,8 +61,6 @@ public:
 
 		virtual ControlState GetState() const = 0;
 
-		bool ShouldHaveInput();
-
 		ControlState GetGatedState()
 		{
 			if (InputGateOn())
@@ -100,10 +98,7 @@ public:
 	virtual std::string GetName() const = 0;
 	virtual int GetId() const = 0;
 	virtual std::string GetSource() const = 0;
-	virtual bool UpdateInput() = 0;
-	virtual bool UpdateOutput() = 0;
-
-	virtual void ClearInputState();
+	virtual void UpdateInput() {}
 
 	const std::vector<Input*>& Inputs() const { return m_inputs; }
 	const std::vector<Output*>& Outputs() const { return m_outputs; }

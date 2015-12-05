@@ -1,10 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <atomic>
 #include "Common/Atomic.h"
 #include "Common/ChunkFile.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FPURoundMode.h"
 #include "Common/MathUtil.h"
 #include "Common/Thread.h"
@@ -20,8 +21,8 @@
 #include "VideoBackends/Software/SWCommandProcessor.h"
 #include "VideoBackends/Software/VideoBackend.h"
 
-#include "VideoCommon/DataReader.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/VertexLoaderUtils.h"
 
 namespace SWCommandProcessor
 {
@@ -41,8 +42,8 @@ static u8 commandBuffer[commandBufferSize];
 static u32 readPos;
 static u32 writePos;
 static int et_UpdateInterrupts;
-static volatile bool interruptSet;
-static volatile bool interruptWaiting;
+static std::atomic<bool> interruptSet;
+static std::atomic<bool> interruptWaiting;
 
 static CPReg cpreg; // shared between gfx and emulator thread
 
@@ -57,26 +58,7 @@ void DoState(PointerWrap &p)
 	p.Do(interruptWaiting);
 
 	// Is this right?
-	p.DoArray(g_pVideoData,writePos);
-}
-
-// does it matter that there is no synchronization between threads during writes?
-static inline void WriteLow (u32& _reg, u16 lowbits)
-{
-	_reg = (_reg & 0xFFFF0000) | lowbits;
-}
-static inline void WriteHigh(u32& _reg, u16 highbits)
-{
-	_reg = (_reg & 0x0000FFFF) | ((u32)highbits << 16);
-}
-
-static inline u16 ReadLow(u32 _reg)
-{
-	return (u16)(_reg & 0xFFFF);
-}
-static inline u16 ReadHigh(u32 _reg)
-{
-	return (u16)(_reg >> 16);
+	p.DoArray(g_video_buffer_read_ptr, writePos);
 }
 
 static void UpdateInterrupts_Wrapper(u64 userdata, int cyclesLate)
@@ -111,10 +93,10 @@ void Init()
 	readPos = 0;
 	writePos = 0;
 
-	interruptSet = false;
-	interruptWaiting = false;
+	interruptSet.store(false);
+	interruptWaiting.store(false);
 
-	g_pVideoData = nullptr;
+	g_video_buffer_read_ptr = nullptr;
 	g_bSkipCurrentFrame = false;
 }
 
@@ -124,7 +106,7 @@ void Shutdown()
 
 void RunGpu()
 {
-	if (!SConfig::GetInstance().m_LocalCoreStartupParameter.bCPUThread)
+	if (!SConfig::GetInstance().bCPUThread)
 	{
 		// We are going to do FP math on the main thread so have to save the current state
 		FPURoundMode::SaveSIMDState();
@@ -143,7 +125,7 @@ void RunGpu()
 void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 {
 	// Directly map reads and writes to the cpreg structure.
-	for (size_t i = 0; i < sizeof (cpreg) / sizeof (u16); ++i)
+	for (u32 i = 0; i < sizeof (cpreg) / sizeof (u16); ++i)
 	{
 		u16* ptr = ((u16*)&cpreg) + i;
 		mmio->Register(base | (i * 2),
@@ -154,7 +136,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 
 	// Bleh. Apparently SWCommandProcessor does not know about regs 0x40 to
 	// 0x64...
-	for (size_t i = 0x40; i < 0x64; ++i)
+	for (u32 i = 0x40; i < 0x64; ++i)
 	{
 		mmio->Register(base | i,
 			MMIO::Constant<u16>(0),
@@ -193,7 +175,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 	);
 }
 
-void STACKALIGN GatherPipeBursted()
+void GatherPipeBursted()
 {
 	if (cpreg.ctrl.GPLinkEnable)
 	{
@@ -214,17 +196,17 @@ void UpdateInterrupts(u64 userdata)
 {
 	if (userdata)
 	{
-		interruptSet = true;
+		interruptSet.store(true);
 		INFO_LOG(COMMANDPROCESSOR,"Interrupt set");
 		ProcessorInterface::SetInterrupt(INT_CAUSE_CP, true);
 	}
 	else
 	{
-		interruptSet = false;
+		interruptSet.store(false);
 		INFO_LOG(COMMANDPROCESSOR,"Interrupt cleared");
 		ProcessorInterface::SetInterrupt(INT_CAUSE_CP, false);
 	}
-	interruptWaiting = false;
+	interruptWaiting.store(false);
 }
 
 void UpdateInterruptsFromVideoBackend(u64 userdata)
@@ -304,12 +286,12 @@ static void SetStatus()
 
 	bool interrupt = bpInt || ovfInt || undfInt;
 
-	if (interrupt != interruptSet && !interruptWaiting)
+	if (interrupt != interruptSet.load() && !interruptWaiting.load())
 	{
 		u64 userdata = interrupt?1:0;
-		if (SConfig::GetInstance().m_LocalCoreStartupParameter.bCPUThread)
+		if (SConfig::GetInstance().bCPUThread)
 		{
-			interruptWaiting = true;
+			interruptWaiting.store(true);
 			SWCommandProcessor::UpdateInterruptsFromVideoBackend(userdata);
 		}
 		else
@@ -330,7 +312,7 @@ bool RunBuffer()
 
 	_dbg_assert_(COMMANDPROCESSOR, writePos >= readPos);
 
-	g_pVideoData = &commandBuffer[readPos];
+	g_video_buffer_read_ptr = &commandBuffer[readPos];
 
 	u32 availableBytes = writePos - readPos;
 
@@ -341,7 +323,7 @@ bool RunBuffer()
 		OpcodeDecoder::Run(availableBytes);
 
 		// if data was read by the opcode decoder then the video data pointer changed
-		readPos = (u32)(g_pVideoData - &commandBuffer[0]);
+		readPos = (u32)(g_video_buffer_read_ptr - &commandBuffer[0]);
 		_dbg_assert_(VIDEO, writePos >= readPos);
 		availableBytes = writePos - readPos;
 	}

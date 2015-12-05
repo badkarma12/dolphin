@@ -1,9 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 //
 #define AX_WII // Used in AXVoice.
 
+#include "Common/CommonFuncs.h"
 #include "Common/MathUtil.h"
 #include "Common/StringUtil.h"
 
@@ -252,7 +253,8 @@ void AXWiiUCode::SetupProcessing(u32 init_addr)
 		init_data[i] = HLEMemory_Read_U16(init_addr + 2 * i);
 
 	// List of all buffers we have to initialize
-	struct {
+	struct
+	{
 		int* ptr;
 		u32 samples;
 	} buffers[] = {
@@ -453,8 +455,7 @@ void AXWiiUCode::ProcessPBList(u32 pb_addr)
 			m_samples_aux3
 		}};
 
-		if (!ReadPB(pb_addr, pb))
-			break;
+		ReadPB(pb_addr, pb);
 
 		u16 num_updates[3];
 		u16 updates[1024];
@@ -469,7 +470,7 @@ void AXWiiUCode::ProcessPBList(u32 pb_addr)
 				             m_coeffs_available ? m_coeffs : nullptr);
 
 				// Forward the buffers
-				for (u32 i = 0; i < sizeof (buffers.ptrs) / sizeof (buffers.ptrs[0]); ++i)
+				for (size_t i = 0; i < ArraySize(buffers.ptrs); ++i)
 					buffers.ptrs[i] += 32;
 			}
 			ReinjectUpdatesFields(pb, num_updates, updates_addr);
@@ -489,7 +490,7 @@ void AXWiiUCode::ProcessPBList(u32 pb_addr)
 void AXWiiUCode::MixAUXSamples(int aux_id, u32 write_addr, u32 read_addr, u16 volume)
 {
 	u16 volume_ramp[96];
-	GenerateVolumeRamp(volume_ramp, m_last_aux_volumes[aux_id], volume, 96);
+	GenerateVolumeRamp(volume_ramp, m_last_aux_volumes[aux_id], volume, ArraySize(volume_ramp));
 	m_last_aux_volumes[aux_id] = volume;
 
 	int* buffers[3] = { nullptr };
@@ -588,7 +589,7 @@ void AXWiiUCode::OutputSamples(u32 lr_addr, u32 surround_addr, u16 volume,
                                  bool upload_auxc)
 {
 	u16 volume_ramp[96];
-	GenerateVolumeRamp(volume_ramp, m_last_main_volume, volume, 96);
+	GenerateVolumeRamp(volume_ramp, m_last_main_volume, volume, ArraySize(volume_ramp));
 	m_last_main_volume = volume;
 
 	int upload_buffer[3 * 32] = { 0 };
@@ -617,11 +618,8 @@ void AXWiiUCode::OutputSamples(u32 lr_addr, u32 surround_addr, u16 volume,
 		left = ((s64)left * volume_ramp[i]) >> 15;
 		right = ((s64)right * volume_ramp[i]) >> 15;
 
-		MathUtil::Clamp(&left, -32767, 32767);
-		MathUtil::Clamp(&right, -32767, 32767);
-
-		m_samples_left[i] = left;
-		m_samples_right[i] = right;
+		m_samples_left[i]  = MathUtil::Clamp(left, -32767, 32767);
+		m_samples_right[i] = MathUtil::Clamp(right, -32767, 32767);
 	}
 
 	for (u32 i = 0; i < 3 * 32; ++i)
@@ -652,16 +650,10 @@ void AXWiiUCode::OutputWMSamples(u32* addresses)
 		u16* out = (u16*)HLEMemory_Get_Pointer(addresses[i]);
 		for (u32 j = 0; j < 3 * 6; ++j)
 		{
-			int sample = in[j];
-			MathUtil::Clamp(&sample, -32767, 32767);
+			int sample = MathUtil::Clamp(in[j], -32767, 32767);
 			out[j] = Common::swap16((u16)sample);
 		}
 	}
-}
-
-u32 AXWiiUCode::GetUpdateMs()
-{
-	return 3;
 }
 
 void AXWiiUCode::DoState(PointerWrap &p)

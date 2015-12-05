@@ -1,10 +1,13 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <algorithm>
+
+#include "Common/Assert.h"
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/FifoPlayer/FifoAnalyzer.h"
-
 #include "VideoCommon/VertexLoader.h"
 #include "VideoCommon/VertexLoader_Normal.h"
 #include "VideoCommon/VertexLoader_Position.h"
@@ -16,38 +19,36 @@ namespace FifoAnalyzer
 void Init()
 {
 	VertexLoader_Normal::Init();
-	VertexLoader_Position::Init();
-	VertexLoader_TextCoord::Init();
 }
 
-u8 ReadFifo8(u8 *&data)
+u8 ReadFifo8(u8*& data)
 {
 	u8 value = data[0];
 	data += 1;
 	return value;
 }
 
-u16 ReadFifo16(u8 *&data)
+u16 ReadFifo16(u8*& data)
 {
 	u16 value = Common::swap16(data);
 	data += 2;
 	return value;
 }
 
-u32 ReadFifo32(u8 *&data)
+u32 ReadFifo32(u8*& data)
 {
 	u32 value = Common::swap32(data);
 	data += 4;
 	return value;
 }
 
-void InitBPMemory(BPMemory *bpMem)
+void InitBPMemory(BPMemory* bpMem)
 {
 	memset(bpMem, 0, sizeof(BPMemory));
 	bpMem->bpMask = 0x00FFFFFF;
 }
 
-BPCmd DecodeBPCmd(u32 value, const BPMemory &bpMem)
+BPCmd DecodeBPCmd(u32 value, const BPMemory& bpMem)
 {
 	//handle the mask register
 	int opcode = value >> 24;
@@ -60,7 +61,7 @@ BPCmd DecodeBPCmd(u32 value, const BPMemory &bpMem)
 	return bp;
 }
 
-void LoadBPReg(const BPCmd &bp, BPMemory &bpMem)
+void LoadBPReg(const BPCmd& bp, BPMemory& bpMem)
 {
 	((u32*)&bpMem)[bp.address] = bp.newvalue;
 
@@ -69,19 +70,7 @@ void LoadBPReg(const BPCmd &bp, BPMemory &bpMem)
 		bpMem.bpMask = 0xFFFFFF;
 }
 
-void GetTlutLoadData(u32 &tlutAddr, u32 &memAddr, u32 &tlutXferCount, BPMemory &bpMem)
-{
-	tlutAddr = (bpMem.tmem_config.tlut_dest & 0x3FF) << 9;
-	tlutXferCount = (bpMem.tmem_config.tlut_dest & 0x1FFC00) >> 5;
-
-	// TODO - figure out a cleaner way.
-	if (Core::g_CoreStartupParameter.bWii)
-		memAddr = bpMem.tmem_config.tlut_src << 5;
-	else
-		memAddr = (bpMem.tmem_config.tlut_src & 0xFFFFF) << 5;
-}
-
-void LoadCPReg(u32 subCmd, u32 value, CPMemory &cpMem)
+void LoadCPReg(u32 subCmd, u32 value, CPMemory& cpMem)
 {
 	switch (subCmd & 0xF0)
 	{
@@ -120,26 +109,21 @@ void LoadCPReg(u32 subCmd, u32 value, CPMemory &cpMem)
 	}
 }
 
-u32 CalculateVertexSize(int vatIndex, const CPMemory &cpMem)
+u32 CalculateVertexSize(int vatIndex, const CPMemory& cpMem)
 {
-	u32 vertexSize = 0;
-
 	int sizes[21];
 	CalculateVertexElementSizes(sizes, vatIndex, cpMem);
 
-	for (auto& size : sizes)
-		vertexSize += size;
-
-	return vertexSize;
+	return std::accumulate(std::begin(sizes), std::end(sizes), 0U);
 }
 
-void CalculateVertexElementSizes(int sizes[], int vatIndex, const CPMemory &cpMem)
+void CalculateVertexElementSizes(int sizes[], int vatIndex, const CPMemory& cpMem)
 {
 	const TVtxDesc &vtxDesc = cpMem.vtxDesc;
 	const VAT &vtxAttr = cpMem.vtxAttr[vatIndex];
 
 	// Colors
-	const u32 colDesc[2] = {vtxDesc.Color0, vtxDesc.Color1};
+	const u64 colDesc[2] = {vtxDesc.Color0, vtxDesc.Color1};
 	const u32 colComp[2] = {vtxAttr.g0.Color0Comp, vtxAttr.g0.Color1Comp};
 
 	const u32 tcElements[8] =

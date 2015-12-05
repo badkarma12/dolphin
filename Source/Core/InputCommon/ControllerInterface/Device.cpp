@@ -1,5 +1,5 @@
 // Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <sstream>
@@ -64,20 +64,6 @@ Device::Output* Device::FindOutput(const std::string &name) const
 	}
 
 	return nullptr;
-}
-
-//
-// Device :: ClearInputState
-//
-// Device classes should override this function
-// ControllerInterface will call this when the device returns failure during UpdateInput
-// used to try to set all buttons and axes to their default state when user unplugs a gamepad during play
-// buttons/axes that were held down at the time of unplugging should be seen as not pressed after unplugging
-//
-void Device::ClearInputState()
-{
-	// this is going to be called for every UpdateInput call that fails
-	// kinda slow but, w/e, should only happen when user unplugs a device while playing
 }
 
 bool Device::Control::InputGateOn()

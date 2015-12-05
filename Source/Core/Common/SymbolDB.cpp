@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cstring>
@@ -7,8 +7,9 @@
 #include <string>
 #include <utility>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/SymbolDB.h"
+#include "Common/Logging/Log.h"
 
 void SymbolDB::List()
 {
@@ -19,8 +20,7 @@ void SymbolDB::List()
 		          func.second.size, func.second.hash,
 		          func.second.numCalls);
 	}
-	INFO_LOG(OSHLE, "%lu functions known in this program above.",
-	         (unsigned long)functions.size());
+	INFO_LOG(OSHLE, "%zu functions known in this program above.", functions.size());
 }
 
 void SymbolDB::Clear(const char *prefix)
@@ -52,5 +52,5 @@ Symbol* SymbolDB::GetSymbolFromName(const std::string& name)
 
 void SymbolDB::AddCompleteSymbol(const Symbol &symbol)
 {
-	functions.insert(std::pair<u32, Symbol>(symbol.address, symbol));
+	functions.emplace(symbol.address, symbol);
 }

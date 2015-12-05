@@ -1,28 +1,17 @@
 // Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-// Note that this file *and this file only* must also have %DXSDK_DIR%/Include prepended
-// to its include path in order fetch dxsdkver.h and XAudio2.h from the DXSDK
-// instead of other possible places. This may be accomplished by adding the path to
-// the AdditionalIncludeDirectories for this file via msbuild.
+// Note that this file *and this file only* must include XAudio2.h from the old
+// DXSDK instead of other possible places.
+
+#include <XAudio2_7/XAudio2.h>
 
 #include "AudioCommon/AudioCommon.h"
 #include "AudioCommon/XAudio2_7Stream.h"
 #include "Common/Event.h"
-
-#ifdef HAVE_DXSDK
-#include <dxsdkver.h>
-#if (_DXSDK_PRODUCT_MAJOR == 9) && (_DXSDK_PRODUCT_MINOR == 29) && (_DXSDK_BUILD_MAJOR == 1962) && (_DXSDK_BUILD_MINOR == 0)
-#define HAVE_DXSDK_JUNE_2010
-#else
-#pragma message("You have DirectX SDK installed, but it is not the expected version (June 2010). Update it to build this module.")
-#endif
-#endif
-
-#ifdef HAVE_DXSDK_JUNE_2010
-
-#include <XAudio2.h>
+#include "Common/MsgHandler.h"
+#include "Common/Logging/Log.h"
 
 struct StreamingVoiceContext2_7 : public IXAudio2VoiceCallback
 {
@@ -91,7 +80,7 @@ StreamingVoiceContext2_7::StreamingVoiceContext2_7(IXAudio2 *pXAudio2, CMixer *p
 	HRESULT hr;
 	if (FAILED(hr = pXAudio2->CreateSourceVoice(&m_source_voice, &wfx.Format, XAUDIO2_VOICE_NOSRC, 1.0f, this)))
 	{
-		PanicAlertT("XAudio2_7 CreateSourceVoice failed: %#X", hr);
+		PanicAlert("XAudio2_7 CreateSourceVoice failed: %#X", hr);
 		return;
 	}
 
@@ -156,9 +145,8 @@ bool XAudio2_7::InitLibrary()
 	return m_xaudio2_dll != nullptr;
 }
 
-XAudio2_7::XAudio2_7(CMixer *mixer)
-	: SoundStream(mixer)
-	, m_mastering_voice(nullptr)
+XAudio2_7::XAudio2_7()
+	: m_mastering_voice(nullptr)
 	, m_volume(1.0f)
 	, m_cleanup_com(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
 {
@@ -175,11 +163,11 @@ bool XAudio2_7::Start()
 {
 	HRESULT hr;
 
-	// callback doesn't seem to run on a specific cpu anyways
+	// callback doesn't seem to run on a specific CPU anyways
 	IXAudio2* xaudptr;
 	if (FAILED(hr = XAudio2Create(&xaudptr, 0, XAUDIO2_DEFAULT_PROCESSOR)))
 	{
-		PanicAlertT("XAudio2_7 init failed: %#X", hr);
+		PanicAlert("XAudio2_7 init failed: %#X", hr);
 		Stop();
 		return false;
 	}
@@ -189,7 +177,7 @@ bool XAudio2_7::Start()
 	// XAUDIO2_DEFAULT_CHANNELS instead of 2 for expansion?
 	if (FAILED(hr = m_xaudio2->CreateMasteringVoice(&m_mastering_voice, 2, m_mixer->GetSampleRate())))
 	{
-		PanicAlertT("XAudio2_7 master voice creation failed: %#X", hr);
+		PanicAlert("XAudio2_7 master voice creation failed: %#X", hr);
 		Stop();
 		return false;
 	}
@@ -198,7 +186,7 @@ bool XAudio2_7::Start()
 	m_mastering_voice->SetVolume(m_volume);
 
 	m_voice_context = std::unique_ptr<StreamingVoiceContext2_7>
-		(new StreamingVoiceContext2_7(m_xaudio2.get(), m_mixer, m_sound_sync_event));
+		(new StreamingVoiceContext2_7(m_xaudio2.get(), m_mixer.get(), m_sound_sync_event));
 
 	return true;
 }
@@ -210,21 +198,6 @@ void XAudio2_7::SetVolume(int volume)
 
 	if (m_mastering_voice)
 		m_mastering_voice->SetVolume(m_volume);
-}
-
-void XAudio2_7::Update()
-{
-	//m_sound_sync_event.Set();
-
-	//static int xi = 0;
-	//if (100000 == ++xi)
-	//{
-	//    xi = 0;
-	//    XAUDIO2_PERFORMANCE_DATA perfData;
-	//    pXAudio2->GetPerformanceData(&perfData);
-	//    NOTICE_LOG(DSPHLE, "XAudio2_7 latency (samples): %i", perfData.CurrentLatencyInSamples);
-	//    NOTICE_LOG(DSPHLE, "XAudio2_7 total glitches: %i", perfData.GlitchesSinceEngineStarted);
-	//}
 }
 
 void XAudio2_7::Clear(bool mute)
@@ -260,28 +233,3 @@ void XAudio2_7::Stop()
 		m_xaudio2_dll = nullptr;
 	}
 }
-
-#else
-
-struct StreamingVoiceContext2_7 {};
-struct IXAudio2 {};
-struct IXAudio2MasteringVoice {};
-void XAudio2_7::ReleaseIXAudio2(IXAudio2* ptr) {}
-
-XAudio2_7::XAudio2_7(CMixer *mixer)
-	: SoundStream(mixer)
-	, m_mastering_voice(nullptr)
-	, m_volume(1.0f)
-	, m_cleanup_com(false)
-{}
-
-XAudio2_7::~XAudio2_7() {}
-
-bool XAudio2_7::Start() { return SoundStream::Start(); }
-void XAudio2_7::Stop() {}
-void XAudio2_7::Update() {}
-void XAudio2_7::Clear(bool mute) {}
-void XAudio2_7::SetVolume(int volume) {}
-bool XAudio2_7::InitLibrary() { return false; }
-
-#endif

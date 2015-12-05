@@ -1,9 +1,12 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include <cstring>
+
+#include "Common/ChunkFile.h"
 #include "Common/CommonPaths.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Common/MemoryUtil.h"
 #include "Common/Timer.h"
@@ -12,18 +15,20 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/Movie.h"
+#include "Core/NetPlayProto.h"
 #include "Core/HW/EXI_DeviceIPL.h"
+#include "Core/HW/Sram.h"
 #include "Core/HW/SystemTimers.h"
 
 // We should provide an option to choose from the above, or figure out the checksum (the algo in yagcd seems wrong)
 // so that people can change default language.
 
-static const char iplverPAL[0x100] = "(C) 1999-2001 Nintendo.  All rights reserved."
-									 "(C) 1999 ArtX Inc.  All rights reserved."
-									 "PAL  Revision 1.0  ";
+static const char iplverPAL[0x100]  = "(C) 1999-2001 Nintendo.  All rights reserved."
+                                      "(C) 1999 ArtX Inc.  All rights reserved."
+                                      "PAL  Revision 1.0  ";
 
-static const char iplverNTSC[0x100]= "(C) 1999-2001 Nintendo.  All rights reserved."
-									 "(C) 1999 ArtX Inc.  All rights reserved.";
+static const char iplverNTSC[0x100] = "(C) 1999-2001 Nintendo.  All rights reserved."
+                                      "(C) 1999 ArtX Inc.  All rights reserved.";
 
 // bootrom descrambler reversed by segher
 // Copyright 2008 Segher Boessenkool <segher@kernel.crashing.org>
@@ -85,12 +90,12 @@ CEXIIPL::CEXIIPL() :
 	m_FontsLoaded(false)
 {
 	// Determine region
-	m_bNTSC = SConfig::GetInstance().m_LocalCoreStartupParameter.bNTSC;
+	m_bNTSC = SConfig::GetInstance().bNTSC;
 
 	// Create the IPL
 	m_pIPL = (u8*)AllocateMemoryPages(ROM_SIZE);
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bHLE_BS2)
+	if (SConfig::GetInstance().bHLE_BS2)
 	{
 		// Copy header
 		memcpy(m_pIPL, m_bNTSC ? iplverNTSC : iplverPAL, m_bNTSC ? sizeof(iplverNTSC) : sizeof(iplverPAL));
@@ -102,7 +107,7 @@ CEXIIPL::CEXIIPL() :
 	else
 	{
 		// Load whole ROM dump
-		LoadFileToIPL(SConfig::GetInstance().m_LocalCoreStartupParameter.m_strBootROM, 0);
+		LoadFileToIPL(SConfig::GetInstance().m_strBootROM, 0);
 		// Descramble the encrypted section (contains BS1 and BS2)
 		Descrambler(m_pIPL + 0x100, 0x1aff00);
 		INFO_LOG(BOOT, "Loaded bootrom: %s", m_pIPL); // yay for null-terminated strings ;p
@@ -112,7 +117,8 @@ CEXIIPL::CEXIIPL() :
 	memset(m_RTC, 0, sizeof(m_RTC));
 
 	// We Overwrite language selection here since it's possible on the GC to change the language as you please
-	g_SRAM.lang = SConfig::GetInstance().m_LocalCoreStartupParameter.SelectedLanguage;
+	g_SRAM.lang = SConfig::GetInstance().SelectedLanguage;
+	FixSRAMChecksums();
 
 	WriteProtectMemory(m_pIPL, ROM_SIZE);
 	m_uAddress = 0;
@@ -124,8 +130,15 @@ CEXIIPL::~CEXIIPL()
 	m_pIPL = nullptr;
 
 	// SRAM
-	File::IOFile file(SConfig::GetInstance().m_LocalCoreStartupParameter.m_strSRAM, "wb");
-	file.WriteArray(&g_SRAM, 1);
+	if (!g_SRAM_netplay_initialized)
+	{
+		File::IOFile file(SConfig::GetInstance().m_strSRAM, "wb");
+		file.WriteArray(&g_SRAM, 1);
+	}
+	else
+	{
+		g_SRAM_netplay_initialized = false;
+	}
 }
 void CEXIIPL::DoState(PointerWrap &p)
 {
@@ -137,7 +150,7 @@ void CEXIIPL::DoState(PointerWrap &p)
 	p.Do(m_FontsLoaded);
 }
 
-void CEXIIPL::LoadFileToIPL(std::string filename, u32 offset)
+void CEXIIPL::LoadFileToIPL(const std::string& filename, u32 offset)
 {
 	File::IOFile pStream(filename, "rb");
 	if (pStream)
@@ -159,16 +172,28 @@ void CEXIIPL::SetCS(int _iCS)
 	}
 }
 
-bool CEXIIPL::IsPresent()
+void CEXIIPL::UpdateRTC()
+{
+	// Seconds between 1.1.2000 and 4.1.2008 16:00:38
+	static constexpr u32 WII_BIAS = 0x0F1114A6;
+
+	u32 rtc;
+
+	if (SConfig::GetInstance().bWii)
+		rtc = Common::swap32(GetGCTime() - WII_BIAS);
+	else
+		rtc = Common::swap32(GetGCTime());
+
+	std::memcpy(m_RTC, &rtc, sizeof(u32));
+}
+
+bool CEXIIPL::IsPresent() const
 {
 	return true;
 }
 
 void CEXIIPL::TransferByte(u8& _uByte)
 {
-	// Seconds between 1.1.2000 and 4.1.2008 16:00:38
-	const u32 cWiiBias = 0x0F1114A6;
-
 	// The first 4 bytes must be the address
 	// If we haven't read it, do it now
 	if (m_uPosition <= 3)
@@ -181,17 +206,8 @@ void CEXIIPL::TransferByte(u8& _uByte)
 		// Check if the command is complete
 		if (m_uPosition == 3)
 		{
-			// Get the time ...
-			u32 &rtc = *((u32 *)&m_RTC);
-			if (SConfig::GetInstance().m_LocalCoreStartupParameter.bWii)
-			{
-				// Subtract Wii bias
-				rtc = Common::swap32(CEXIIPL::GetGCTime() - cWiiBias);
-			}
-			else
-			{
-				rtc = Common::swap32(CEXIIPL::GetGCTime());
-			}
+			// Get the time...
+			UpdateRTC();
 
 			// Log the command
 			std::string device_name;
@@ -296,7 +312,7 @@ void CEXIIPL::TransferByte(u8& _uByte)
 		case REGION_WRTC0:
 		case REGION_WRTC1:
 		case REGION_WRTC2:
-			// WII only RTC flags... afaik just the wii menu initialize it
+			// Wii only RTC flags... afaik just the Wii Menu initialize it
 		default:
 			if ((m_uAddress >> 6) < ROM_SIZE)
 			{
@@ -338,20 +354,23 @@ u32 CEXIIPL::GetGCTime()
 	u64 ltime = 0;
 	static const u32 cJanuary2000 = 0x386D4380;  // Seconds between 1.1.1970 and 1.1.2000
 
-	if (Movie::IsRecordingInput() || Movie::IsPlayingInput())
+	if (Movie::IsMovieActive())
 	{
 		ltime = Movie::GetRecordingStartTime();
 
 		// let's keep time moving forward, regardless of what it starts at
 		ltime += CoreTiming::GetTicks() / SystemTimers::GetTicksPerSecond();
 	}
-	else
+	else if (NetPlay::IsNetPlayRunning())
 	{
-		// hack in some netplay stuff
 		ltime = NetPlay_GetGCTime();
 
-		if (0 == ltime)
-			ltime = Common::Timer::GetLocalTimeSinceJan1970();
+		// let's keep time moving forward, regardless of what it starts at
+		ltime += CoreTiming::GetTicks() / SystemTimers::GetTicksPerSecond();
+	}
+	else
+	{
+		ltime = Common::Timer::GetLocalTimeSinceJan1970();
 	}
 
 	return ((u32)ltime - cJanuary2000);
@@ -363,7 +382,7 @@ u32 CEXIIPL::GetGCTime()
 	// Get SRAM bias
 	u32 Bias;
 
-	for (int i=0; i<4; i++)
+	for (int i = 0; i < 4; i++)
 	{
 		((u8*)&Bias)[i] = sram_dump[0xc + (i^3)];
 	}

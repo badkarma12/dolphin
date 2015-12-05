@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <string>
@@ -25,8 +25,15 @@ PlainFileReader* PlainFileReader::Create(const std::string& filename)
 
 bool PlainFileReader::Read(u64 offset, u64 nbytes, u8* out_ptr)
 {
-	m_file.Seek(offset, SEEK_SET);
-	return m_file.ReadBytes(out_ptr, nbytes);
+	if (m_file.Seek(offset, SEEK_SET) && m_file.ReadBytes(out_ptr, nbytes))
+	{
+		return true;
+	}
+	else
+	{
+		m_file.Clear();
+		return false;
+	}
 }
 
 }  // namespace

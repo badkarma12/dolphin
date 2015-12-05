@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -11,28 +11,27 @@
 #include <atomic>
 
 #include "AudioCommon/SoundStream.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/Thread.h"
 
 class PulseAudio final : public SoundStream
 {
 #if defined(HAVE_PULSEAUDIO) && HAVE_PULSEAUDIO
 public:
-	PulseAudio(CMixer *mixer);
+	PulseAudio();
 
-	virtual bool Start() override;
-	virtual void Stop() override;
+	bool Start() override;
+	void Stop() override;
+	void Update() override;
 
-	static bool isValid() {return true;}
-
-	virtual void Update() override;
+	static bool isValid() { return true; }
 
 	void StateCallback(pa_context *c);
 	void WriteCallback(pa_stream *s, size_t length);
 	void UnderflowCallback(pa_stream *s);
 
 private:
-	virtual void SoundLoop() override;
+	void SoundLoop() override;
 
 	bool PulseInit();
 	void PulseShutdown();
@@ -45,6 +44,10 @@ private:
 	std::thread m_thread;
 	std::atomic<bool> m_run_thread;
 
+	bool m_stereo; // stereo, else surround
+	int m_bytespersample;
+	int m_channels;
+
 	int m_pa_error;
 	int m_pa_connected;
 	pa_mainloop *m_pa_ml;
@@ -52,8 +55,5 @@ private:
 	pa_context *m_pa_ctx;
 	pa_stream *m_pa_s;
 	pa_buffer_attr m_pa_ba;
-#else
-public:
-	PulseAudio(CMixer *mixer) : SoundStream(mixer) {}
 #endif
 };

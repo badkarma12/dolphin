@@ -1,10 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cmath>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
 #include "Common/StringUtil.h"
@@ -28,7 +28,10 @@ void UpdateActiveConfig()
 VideoConfig::VideoConfig()
 {
 	bRunning = false;
+
+	// Exclusive fullscreen flags
 	bFullscreen = false;
+	bExclusiveMode = false;
 
 	// Needed for the first frame, I think
 	fAspectRatioHackW = 1;
@@ -36,9 +39,12 @@ VideoConfig::VideoConfig()
 
 	// disable all features by default
 	backend_info.APIType = API_NONE;
-	backend_info.bUseRGBATextures = false;
-	backend_info.bUseMinimalMipCount = false;
 	backend_info.bSupportsExclusiveFullscreen = false;
+
+	// Game-specific stereoscopy settings
+	bStereoEFBMonoDepth = false;
+	iStereoDepthPercentage = 100;
+	iStereoConvergenceMinimum = 0;
 }
 
 void VideoConfig::Load(const std::string& ini_file)
@@ -56,32 +62,27 @@ void VideoConfig::Load(const std::string& ini_file)
 	settings->Get("Crop", &bCrop, false);
 	settings->Get("UseXFB", &bUseXFB, 0);
 	settings->Get("UseRealXFB", &bUseRealXFB, 0);
-	settings->Get("SafeTextureCacheColorSamples", &iSafeTextureCache_ColorSamples,128);
+	settings->Get("SafeTextureCacheColorSamples", &iSafeTextureCache_ColorSamples, 128);
 	settings->Get("ShowFPS", &bShowFPS, false);
 	settings->Get("LogRenderTimeToFile", &bLogRenderTimeToFile, false);
-	settings->Get("ShowInputDisplay", &bShowInputDisplay, false);
 	settings->Get("OverlayStats", &bOverlayStats, false);
 	settings->Get("OverlayProjStats", &bOverlayProjStats, false);
-	settings->Get("ShowEFBCopyRegions", &bShowEFBCopyRegions, false);
 	settings->Get("DumpTextures", &bDumpTextures, 0);
 	settings->Get("HiresTextures", &bHiresTextures, 0);
+	settings->Get("ConvertHiresTextures", &bConvertHiresTextures, 0);
+	settings->Get("CacheHiresTextures", &bCacheHiresTextures, 0);
 	settings->Get("DumpEFBTarget", &bDumpEFBTarget, 0);
-	settings->Get("DumpFrames", &bDumpFrames, 0);
 	settings->Get("FreeLook", &bFreeLook, 0);
 	settings->Get("UseFFV1", &bUseFFV1, 0);
-	settings->Get("AnaglyphStereo", &bAnaglyphStereo, false);
-	settings->Get("AnaglyphStereoSeparation", &iAnaglyphStereoSeparation, 200);
-	settings->Get("AnaglyphFocalAngle", &iAnaglyphFocalAngle, 0);
 	settings->Get("EnablePixelLighting", &bEnablePixelLighting, 0);
 	settings->Get("FastDepthCalc", &bFastDepthCalc, true);
 	settings->Get("MSAA", &iMultisampleMode, 0);
-	settings->Get("EFBScale", &iEFBScale, (int) SCALE_1X); // native
-	settings->Get("DstAlphaPass", &bDstAlphaPass, false);
+	settings->Get("SSAA", &bSSAA, false);
+	settings->Get("EFBScale", &iEFBScale, (int)SCALE_1X); // native
 	settings->Get("TexFmtOverlayEnable", &bTexFmtOverlayEnable, 0);
 	settings->Get("TexFmtOverlayCenter", &bTexFmtOverlayCenter, 0);
 	settings->Get("WireFrame", &bWireFrame, 0);
 	settings->Get("DisableFog", &bDisableFog, 0);
-	settings->Get("OMPDecoder", &bOMPDecoder, false);
 	settings->Get("EnableShaderDebugging", &bEnableShaderDebugging, false);
 	settings->Get("BorderlessFullscreen", &bBorderlessFullscreen, false);
 
@@ -89,14 +90,32 @@ void VideoConfig::Load(const std::string& ini_file)
 	enhancements->Get("ForceFiltering", &bForceFiltering, 0);
 	enhancements->Get("MaxAnisotropy", &iMaxAnisotropy, 0);  // NOTE - this is x in (1 << x)
 	enhancements->Get("PostProcessingShader", &sPostProcessingShader, "");
+	enhancements->Get("StereoMode", &iStereoMode, 0);
+	enhancements->Get("StereoDepth", &iStereoDepth, 20);
+	enhancements->Get("StereoConvergence", &iStereoConvergence, 20);
+	enhancements->Get("StereoSwapEyes", &bStereoSwapEyes, false);
+
+	//currently these settings are not saved in global config, so we could've initialized them directly
+	for (size_t i = 0; i < oStereoPresets.size(); ++i)
+	{
+		enhancements->Get(StringFromFormat("StereoConvergence_%zu", i), &oStereoPresets[i].depth, iStereoConvergence);
+		enhancements->Get(StringFromFormat("StereoDepth_%zu", i), &oStereoPresets[i].convergence, iStereoDepth);
+	}
+	enhancements->Get("StereoActivePreset", &iStereoActivePreset, 0);
+	iStereoConvergence = oStereoPresets[iStereoActivePreset].convergence;
+	iStereoDepth = oStereoPresets[iStereoActivePreset].depth;
 
 	IniFile::Section* hacks = iniFile.GetOrCreateSection("Hacks");
 	hacks->Get("EFBAccessEnable", &bEFBAccessEnable, true);
-	hacks->Get("EFBCopyEnable", &bEFBCopyEnable, true);
-	hacks->Get("EFBToTextureEnable", &bCopyEFBToTexture, true);
+	hacks->Get("BBoxEnable", &bBBoxEnable, false);
+	hacks->Get("ForceProgressive", &bForceProgressive, true);
+	hacks->Get("EFBToTextureEnable", &bSkipEFBCopyToRam, true);
 	hacks->Get("EFBScaledCopy", &bCopyEFBScaled, true);
-	hacks->Get("EFBCopyCacheEnable", &bEFBCopyCacheEnable, false);
 	hacks->Get("EFBEmulateFormatChanges", &bEFBEmulateFormatChanges, false);
+
+	// hacks which are disabled by default
+	iPhackvalue[0] = 0;
+	bPerfQueriesEnable = false;
 
 	// Load common settings
 	iniFile.Load(File::GetUserPath(F_DOLPHINCONFIG_IDX));
@@ -116,6 +135,8 @@ void VideoConfig::Load(const std::string& ini_file)
 	// triplicated for each video backend.
 	if (bEnableShaderDebugging)
 		OSD::AddMessage("Warning: Shader Debugging is enabled, performance will suffer heavily", 15000);
+
+	VerifyValidity();
 }
 
 void VideoConfig::GameIniLoad()
@@ -133,7 +154,7 @@ void VideoConfig::GameIniLoad()
 		} \
 	} while (0)
 
-	IniFile iniFile = SConfig::GetInstance().m_LocalCoreStartupParameter.LoadGameIni();
+	IniFile iniFile = SConfig::GetInstance().LoadGameIni();
 
 	CHECK_SETTING("Video_Hardware", "VSync", bVSync);
 
@@ -144,12 +165,13 @@ void VideoConfig::GameIniLoad()
 	CHECK_SETTING("Video_Settings", "UseRealXFB", bUseRealXFB);
 	CHECK_SETTING("Video_Settings", "SafeTextureCacheColorSamples", iSafeTextureCache_ColorSamples);
 	CHECK_SETTING("Video_Settings", "HiresTextures", bHiresTextures);
-	CHECK_SETTING("Video_Settings", "AnaglyphStereo", bAnaglyphStereo);
-	CHECK_SETTING("Video_Settings", "AnaglyphStereoSeparation", iAnaglyphStereoSeparation);
-	CHECK_SETTING("Video_Settings", "AnaglyphFocalAngle", iAnaglyphFocalAngle);
+	CHECK_SETTING("Video_Settings", "ConvertHiresTextures", bConvertHiresTextures);
+	CHECK_SETTING("Video_Settings", "CacheHiresTextures", bCacheHiresTextures);
 	CHECK_SETTING("Video_Settings", "EnablePixelLighting", bEnablePixelLighting);
 	CHECK_SETTING("Video_Settings", "FastDepthCalc", bFastDepthCalc);
 	CHECK_SETTING("Video_Settings", "MSAA", iMultisampleMode);
+	CHECK_SETTING("Video_Settings", "SSAA", bSSAA);
+
 	int tmp = -9000;
 	CHECK_SETTING("Video_Settings", "EFBScale", tmp); // integral
 	if (tmp != -9000)
@@ -177,19 +199,36 @@ void VideoConfig::GameIniLoad()
 		}
 	}
 
-	CHECK_SETTING("Video_Settings", "DstAlphaPass", bDstAlphaPass);
 	CHECK_SETTING("Video_Settings", "DisableFog", bDisableFog);
-	CHECK_SETTING("Video_Settings", "OMPDecoder", bOMPDecoder);
 
 	CHECK_SETTING("Video_Enhancements", "ForceFiltering", bForceFiltering);
 	CHECK_SETTING("Video_Enhancements", "MaxAnisotropy", iMaxAnisotropy);  // NOTE - this is x in (1 << x)
 	CHECK_SETTING("Video_Enhancements", "PostProcessingShader", sPostProcessingShader);
+	CHECK_SETTING("Video_Enhancements", "StereoMode", iStereoMode);
+	CHECK_SETTING("Video_Enhancements", "StereoDepth", iStereoDepth);
+	CHECK_SETTING("Video_Enhancements", "StereoConvergence", iStereoConvergence);
+	CHECK_SETTING("Video_Enhancements", "StereoSwapEyes", bStereoSwapEyes);
+
+	//these are not overrides, they are per-game settings, hence no warning
+	IniFile::Section* enhancements = iniFile.GetOrCreateSection("Enhancements");
+	for (size_t i = 0; i < oStereoPresets.size(); ++i)
+	{
+		enhancements->Get(StringFromFormat("StereoConvergence_%zu", i), &oStereoPresets[i].depth, iStereoConvergence);
+		enhancements->Get(StringFromFormat("StereoDepth_%zu", i), &oStereoPresets[i].convergence, iStereoDepth);
+	}
+	enhancements->Get("StereoActivePreset", &iStereoActivePreset, 0);
+	iStereoConvergence = oStereoPresets[iStereoActivePreset].convergence;
+	iStereoDepth = oStereoPresets[iStereoActivePreset].depth;
+
+	CHECK_SETTING("Video_Stereoscopy", "StereoEFBMonoDepth", bStereoEFBMonoDepth);
+	CHECK_SETTING("Video_Stereoscopy", "StereoDepthPercentage", iStereoDepthPercentage);
+	CHECK_SETTING("Video_Stereoscopy", "StereoConvergenceMinimum", iStereoConvergenceMinimum);
 
 	CHECK_SETTING("Video_Hacks", "EFBAccessEnable", bEFBAccessEnable);
-	CHECK_SETTING("Video_Hacks", "EFBCopyEnable", bEFBCopyEnable);
-	CHECK_SETTING("Video_Hacks", "EFBToTextureEnable", bCopyEFBToTexture);
+	CHECK_SETTING("Video_Hacks", "BBoxEnable", bBBoxEnable);
+	CHECK_SETTING("Video_Hacks", "ForceProgressive", bForceProgressive);
+	CHECK_SETTING("Video_Hacks", "EFBToTextureEnable", bSkipEFBCopyToRam);
 	CHECK_SETTING("Video_Hacks", "EFBScaledCopy", bCopyEFBScaled);
-	CHECK_SETTING("Video_Hacks", "EFBCopyCacheEnable", bEFBCopyCacheEnable);
 	CHECK_SETTING("Video_Hacks", "EFBEmulateFormatChanges", bEFBEmulateFormatChanges);
 
 	CHECK_SETTING("Video", "ProjectionHack", iPhackvalue[0]);
@@ -197,7 +236,6 @@ void VideoConfig::GameIniLoad()
 	CHECK_SETTING("Video", "PH_SZFar", iPhackvalue[2]);
 	CHECK_SETTING("Video", "PH_ZNear", sPhackvalue[0]);
 	CHECK_SETTING("Video", "PH_ZFar", sPhackvalue[1]);
-	CHECK_SETTING("Video", "UseBBox", bUseBBox);
 	CHECK_SETTING("Video", "PerfQueriesEnable", bPerfQueriesEnable);
 
 	if (gfx_override_exists)
@@ -209,7 +247,21 @@ void VideoConfig::VerifyValidity()
 	// TODO: Check iMaxAnisotropy value
 	if (iAdapter < 0 || iAdapter > ((int)backend_info.Adapters.size() - 1)) iAdapter = 0;
 	if (iMultisampleMode < 0 || iMultisampleMode >= (int)backend_info.AAModes.size()) iMultisampleMode = 0;
-	if (!backend_info.bSupportsExclusiveFullscreen) bBorderlessFullscreen = false;
+
+	if (iStereoMode > 0)
+	{
+		if (!backend_info.bSupportsGeometryShaders)
+		{
+			OSD::AddMessage("Stereoscopic 3D isn't supported by your GPU, support for OpenGL 3.2 is required.", 10000);
+			iStereoMode = 0;
+		}
+
+		if (bUseXFB && bUseRealXFB)
+		{
+			OSD::AddMessage("Stereoscopic 3D isn't supported with Real XFB, turning off stereoscopy.", 10000);
+			iStereoMode = 0;
+		}
+	}
 }
 
 void VideoConfig::Save(const std::string& ini_file)
@@ -230,29 +282,24 @@ void VideoConfig::Save(const std::string& ini_file)
 	settings->Set("SafeTextureCacheColorSamples", iSafeTextureCache_ColorSamples);
 	settings->Set("ShowFPS", bShowFPS);
 	settings->Set("LogRenderTimeToFile", bLogRenderTimeToFile);
-	settings->Set("ShowInputDisplay", bShowInputDisplay);
 	settings->Set("OverlayStats", bOverlayStats);
 	settings->Set("OverlayProjStats", bOverlayProjStats);
 	settings->Set("DumpTextures", bDumpTextures);
 	settings->Set("HiresTextures", bHiresTextures);
+	settings->Set("ConvertHiresTextures", bConvertHiresTextures);
+	settings->Set("CacheHiresTextures", bCacheHiresTextures);
 	settings->Set("DumpEFBTarget", bDumpEFBTarget);
-	settings->Set("DumpFrames", bDumpFrames);
 	settings->Set("FreeLook", bFreeLook);
 	settings->Set("UseFFV1", bUseFFV1);
-	settings->Set("AnaglyphStereo", bAnaglyphStereo);
-	settings->Set("AnaglyphStereoSeparation", iAnaglyphStereoSeparation);
-	settings->Set("AnaglyphFocalAngle", iAnaglyphFocalAngle);
 	settings->Set("EnablePixelLighting", bEnablePixelLighting);
 	settings->Set("FastDepthCalc", bFastDepthCalc);
-	settings->Set("ShowEFBCopyRegions", bShowEFBCopyRegions);
 	settings->Set("MSAA", iMultisampleMode);
+	settings->Set("SSAA", bSSAA);
 	settings->Set("EFBScale", iEFBScale);
 	settings->Set("TexFmtOverlayEnable", bTexFmtOverlayEnable);
 	settings->Set("TexFmtOverlayCenter", bTexFmtOverlayCenter);
 	settings->Set("Wireframe", bWireFrame);
-	settings->Set("DstAlphaPass", bDstAlphaPass);
 	settings->Set("DisableFog", bDisableFog);
-	settings->Set("OMPDecoder", bOMPDecoder);
 	settings->Set("EnableShaderDebugging", bEnableShaderDebugging);
 	settings->Set("BorderlessFullscreen", bBorderlessFullscreen);
 
@@ -260,13 +307,17 @@ void VideoConfig::Save(const std::string& ini_file)
 	enhancements->Set("ForceFiltering", bForceFiltering);
 	enhancements->Set("MaxAnisotropy", iMaxAnisotropy);
 	enhancements->Set("PostProcessingShader", sPostProcessingShader);
+	enhancements->Set("StereoMode", iStereoMode);
+	enhancements->Set("StereoDepth", iStereoDepth);
+	enhancements->Set("StereoConvergence", iStereoConvergence);
+	enhancements->Set("StereoSwapEyes", bStereoSwapEyes);
 
 	IniFile::Section* hacks = iniFile.GetOrCreateSection("Hacks");
 	hacks->Set("EFBAccessEnable", bEFBAccessEnable);
-	hacks->Set("EFBCopyEnable", bEFBCopyEnable);
-	hacks->Set("EFBToTextureEnable", bCopyEFBToTexture);
+	hacks->Set("BBoxEnable", bBBoxEnable);
+	hacks->Set("ForceProgressive", bForceProgressive);
+	hacks->Set("EFBToTextureEnable", bSkipEFBCopyToRam);
 	hacks->Set("EFBScaledCopy", bCopyEFBScaled);
-	hacks->Set("EFBCopyCacheEnable", bEFBCopyCacheEnable);
 	hacks->Set("EFBEmulateFormatChanges", bEFBEmulateFormatChanges);
 
 	iniFile.Save(ini_file);

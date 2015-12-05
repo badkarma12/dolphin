@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #ifdef _WIN32
@@ -52,32 +52,33 @@ void ROMUCode::HandleMail(u32 mail)
 	{
 		switch (m_next_parameter)
 		{
-			case 0x80F3A001:
-				m_current_ucode.m_ram_address = mail;
-				break;
+		case 0x80F3A001:
+			m_current_ucode.m_ram_address = mail;
+			break;
 
-			case 0x80F3A002:
-				m_current_ucode.m_length = mail & 0xffff;
-				break;
+		case 0x80F3A002:
+			m_current_ucode.m_length = mail & 0xffff;
+			break;
 
-			case 0x80F3B002:
-				m_current_ucode.m_dmem_length = mail & 0xffff;
-				if (m_current_ucode.m_dmem_length) {
-					NOTICE_LOG(DSPHLE,"m_current_ucode.m_dmem_length = 0x%04x.", m_current_ucode.m_dmem_length);
-				}
-				break;
+		case 0x80F3B002:
+			m_current_ucode.m_dmem_length = mail & 0xffff;
+			if (m_current_ucode.m_dmem_length)
+			{
+				NOTICE_LOG(DSPHLE, "m_current_ucode.m_dmem_length = 0x%04x.", m_current_ucode.m_dmem_length);
+			}
+			break;
 
-			case 0x80F3C002:
-				m_current_ucode.m_imem_address = mail & 0xffff;
-				break;
+		case 0x80F3C002:
+			m_current_ucode.m_imem_address = mail & 0xffff;
+			break;
 
-			case 0x80F3D001:
-				m_current_ucode.m_start_pc = mail & 0xffff;
-				BootUCode();
-				return;  // Important! BootUCode indirectly does "delete this;". Must exit immediately.
+		case 0x80F3D001:
+			m_current_ucode.m_start_pc = mail & 0xffff;
+			BootUCode();
+			return;  // Important! BootUCode indirectly does "delete this;". Must exit immediately.
 
-			default:
-				break;
+		default:
+			break;
 		}
 
 		// THE GODDAMN OVERWRITE WAS HERE. Without the return above, since BootUCode may delete "this", well ...
@@ -91,17 +92,18 @@ void ROMUCode::BootUCode()
 		(u8*)HLEMemory_Get_Pointer(m_current_ucode.m_ram_address),
 		m_current_ucode.m_length);
 
-#if defined(_DEBUG) || defined(DEBUGFAST)
-	std::string ucode_dump_path = StringFromFormat(
-		"%sDSP_UC_%08X.bin", File::GetUserPath(D_DUMPDSP_IDX).c_str(), ector_crc);
-
-	File::IOFile fp(ucode_dump_path, "wb");
-	if (fp)
+	if (SConfig::GetInstance().m_DumpUCode)
 	{
-		fp.WriteArray((u8*)HLEMemory_Get_Pointer(m_current_ucode.m_ram_address),
-		              m_current_ucode.m_length);
+		std::string ucode_dump_path = StringFromFormat(
+			"%sDSP_UC_%08X.bin", File::GetUserPath(D_DUMPDSP_IDX).c_str(), ector_crc);
+
+		File::IOFile fp(ucode_dump_path, "wb");
+		if (fp)
+		{
+			fp.WriteArray((u8*)HLEMemory_Get_Pointer(m_current_ucode.m_ram_address),
+						  m_current_ucode.m_length);
+		}
 	}
-#endif
 
 	DEBUG_LOG(DSPHLE, "CurrentUCode SOURCE Addr: 0x%08x", m_current_ucode.m_ram_address);
 	DEBUG_LOG(DSPHLE, "CurrentUCode Length:      0x%08x", m_current_ucode.m_length);
@@ -112,11 +114,6 @@ void ROMUCode::BootUCode()
 	DEBUG_LOG(DSPHLE, "BootTask - done");
 
 	m_dsphle->SetUCode(ector_crc);
-}
-
-u32 ROMUCode::GetUpdateMs()
-{
-	return SConfig::GetInstance().m_LocalCoreStartupParameter.bWii ? 3 : 5;
 }
 
 void ROMUCode::DoState(PointerWrap &p)

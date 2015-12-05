@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <algorithm>
@@ -44,7 +44,7 @@ CISOFileReader* CISOFileReader::Create(const std::string& filename)
 
 u64 CISOFileReader::GetDataSize() const
 {
-	return GetRawSize();
+	return CISO_MAP_SIZE * m_block_size;
 }
 
 u64 CISOFileReader::GetRawSize() const
@@ -66,7 +66,10 @@ bool CISOFileReader::Read(u64 offset, u64 nbytes, u8* out_ptr)
 			u64 const file_off = CISO_HEADER_SIZE + m_ciso_map[block] * (u64)m_block_size + data_offset;
 
 			if (!(m_file.Seek(file_off, SEEK_SET) && m_file.ReadArray(out_ptr, bytes_to_read)))
+			{
+				m_file.Clear();
 				return false;
+			}
 		}
 		else
 		{
@@ -74,8 +77,8 @@ bool CISOFileReader::Read(u64 offset, u64 nbytes, u8* out_ptr)
 		}
 
 		out_ptr += bytes_to_read;
-		offset += bytes_to_read;
-		nbytes -= bytes_to_read;
+		offset  += bytes_to_read;
+		nbytes  -= bytes_to_read;
 	}
 
 	return true;

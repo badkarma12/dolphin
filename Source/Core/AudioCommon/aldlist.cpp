@@ -1,3 +1,7 @@
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
+// Refer to the license.txt file included.
+
 /*
  * Copyright (c) 2006, Creative Labs Inc.
  * All rights reserved.
@@ -22,8 +26,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <cstring>
+
 #include "AudioCommon/aldlist.h"
-#include "Common/Common.h"
+#include "Common/CommonFuncs.h"
+#include "Common/CommonTypes.h"
 #ifdef _WIN32
 #include "../../../Externals/OpenAL/include/al.h"
 #include "../../../Externals/OpenAL/include/alc.h"
@@ -86,7 +93,7 @@ ALDeviceList::ALDeviceList()
 							alcGetIntegerv(device, ALC_MAJOR_VERSION, sizeof(s32), &ALDeviceInfo.iMajorVersion);
 							alcGetIntegerv(device, ALC_MINOR_VERSION, sizeof(s32), &ALDeviceInfo.iMinorVersion);
 
-							ALDeviceInfo.pvstrExtensions = new vector<string>;
+							ALDeviceInfo.pvstrExtensions = new std::vector<std::string>;
 
 							// Check for ALC Extensions
 							if (alcIsExtensionPresent(device, "ALC_EXT_CAPTURE") == AL_TRUE)
@@ -137,8 +144,10 @@ ALDeviceList::ALDeviceList()
  */
 ALDeviceList::~ALDeviceList()
 {
-	for (auto& di : vDeviceInfo) {
-		if (di.pvstrExtensions) {
+	for (auto& di : vDeviceInfo)
+	{
+		if (di.pvstrExtensions)
+		{
 			di.pvstrExtensions->clear();
 			delete di.pvstrExtensions;
 		}
@@ -171,13 +180,13 @@ char * ALDeviceList::GetDeviceName(s32 index)
  */
 void ALDeviceList::GetDeviceVersion(s32 index, s32 *major, s32 *minor)
 {
-	if (index < GetNumDevices()) {
+	if (index < GetNumDevices())
+	{
 		if (major)
 			*major = vDeviceInfo[index].iMajorVersion;
 		if (minor)
 			*minor = vDeviceInfo[index].iMinorVersion;
 	}
-	return;
 }
 
 /*
@@ -198,9 +207,12 @@ bool ALDeviceList::IsExtensionSupported(s32 index, char *szExtName)
 {
 	bool bReturn = false;
 
-	if (index < GetNumDevices()) {
-		for (auto& ext : *vDeviceInfo[index].pvstrExtensions) {
-			if (!strcasecmp(ext.c_str(), szExtName)) {
+	if (index < GetNumDevices())
+	{
+		for (auto& ext : *vDeviceInfo[index].pvstrExtensions)
+		{
+			if (!strcasecmp(ext.c_str(), szExtName))
+			{
 				bReturn = true;
 				break;
 			}
@@ -224,9 +236,11 @@ s32 ALDeviceList::GetDefaultDevice()
 void ALDeviceList::FilterDevicesMinVer(s32 major, s32 minor)
 {
 	s32 dMajor = 0, dMinor = 0;
-	for (u32 i = 0; i < vDeviceInfo.size(); i++) {
+	for (u32 i = 0; i < vDeviceInfo.size(); i++)
+	{
 		GetDeviceVersion(i, &dMajor, &dMinor);
-		if ((dMajor < major) || ((dMajor == major) && (dMinor < minor))) {
+		if ((dMajor < major) || ((dMajor == major) && (dMinor < minor)))
+		{
 			vDeviceInfo[i].bSelected = false;
 		}
 	}
@@ -238,9 +252,11 @@ void ALDeviceList::FilterDevicesMinVer(s32 major, s32 minor)
 void ALDeviceList::FilterDevicesMaxVer(s32 major, s32 minor)
 {
 	s32 dMajor = 0, dMinor = 0;
-	for (u32 i = 0; i < vDeviceInfo.size(); i++) {
+	for (u32 i = 0; i < vDeviceInfo.size(); i++)
+	{
 		GetDeviceVersion(i, &dMajor, &dMinor);
-		if ((dMajor > major) || ((dMajor == major) && (dMinor > minor))) {
+		if ((dMajor > major) || ((dMajor == major) && (dMinor > minor)))
+		{
 			vDeviceInfo[i].bSelected = false;
 		}
 	}
@@ -253,14 +269,18 @@ void ALDeviceList::FilterDevicesExtension(char *szExtName)
 {
 	bool bFound;
 
-	for (auto& di : vDeviceInfo) {
+	for (auto& di : vDeviceInfo)
+	{
 		bFound = false;
-		for (auto& ext : *di.pvstrExtensions) {
-			if (!strcasecmp(ext.c_str(), szExtName)) {
+		for (auto& ext : *di.pvstrExtensions)
+		{
+			if (!strcasecmp(ext.c_str(), szExtName))
+			{
 				bFound = true;
 				break;
 			}
 		}
+
 		if (!bFound)
 			di.bSelected = false;
 	}
@@ -271,9 +291,11 @@ void ALDeviceList::FilterDevicesExtension(char *szExtName)
  */
 void ALDeviceList::ResetFilters()
 {
-	for (s32 i = 0; i < GetNumDevices(); i++) {
+	for (s32 i = 0; i < GetNumDevices(); i++)
+	{
 		vDeviceInfo[i].bSelected = true;
 	}
+
 	filterIndex = 0;
 }
 
@@ -284,11 +306,14 @@ s32 ALDeviceList::GetFirstFilteredDevice()
 {
 	s32 i;
 
-	for (i = 0; i < GetNumDevices(); i++) {
-		if (vDeviceInfo[i].bSelected == true) {
+	for (i = 0; i < GetNumDevices(); i++)
+	{
+		if (vDeviceInfo[i].bSelected == true)
+		{
 			break;
 		}
 	}
+
 	filterIndex = i + 1;
 	return i;
 }
@@ -300,17 +325,20 @@ s32 ALDeviceList::GetNextFilteredDevice()
 {
 	s32 i;
 
-	for (i = filterIndex; i < GetNumDevices(); i++) {
-		if (vDeviceInfo[i].bSelected == true) {
+	for (i = filterIndex; i < GetNumDevices(); i++)
+	{
+		if (vDeviceInfo[i].bSelected == true)
+		{
 			break;
 		}
 	}
+
 	filterIndex = i + 1;
 	return i;
 }
 
 /*
- * Internal function to detemine max number of Sources that can be generated
+ * Internal function to determine max number of Sources that can be generated
  */
 u32 ALDeviceList::GetMaxNumSources()
 {

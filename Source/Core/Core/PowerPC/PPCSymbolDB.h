@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -34,7 +34,7 @@ public:
 
 	void FillInCallers();
 
-	bool LoadMap(const std::string& filename);
+	bool LoadMap(const std::string& filename, bool bad = false);
 	bool SaveMap(const std::string& filename, bool WithCodes = false) const;
 
 	void PrintCalls(u32 funcAddr) const;

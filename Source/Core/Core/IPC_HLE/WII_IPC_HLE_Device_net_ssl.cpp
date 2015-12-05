@@ -1,10 +1,12 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <algorithm>
 
 #include "Common/FileUtil.h"
+#include "Common/NandPaths.h"
+#include "Core/Core.h"
 #include "Core/IPC_HLE/WII_IPC_HLE_Device_net_ssl.h"
 #include "Core/IPC_HLE/WII_Socket.h"
 
@@ -15,7 +17,7 @@ CWII_IPC_HLE_Device_net_ssl::CWII_IPC_HLE_Device_net_ssl(u32 _DeviceID, const st
 {
 	for (WII_SSL& ssl : _SSL)
 	{
-		memset(&ssl, 0, sizeof(WII_SSL));
+		ssl.active = false;
 	}
 }
 
@@ -26,24 +28,22 @@ CWII_IPC_HLE_Device_net_ssl::~CWII_IPC_HLE_Device_net_ssl()
 	{
 		if (ssl.active)
 		{
-			ssl_close_notify(&ssl.ctx);
-			ssl_session_free(&ssl.session);
-			ssl_free(&ssl.ctx);
+			mbedtls_ssl_close_notify(&ssl.ctx);
+			mbedtls_ssl_session_free(&ssl.session);
+			mbedtls_ssl_free(&ssl.ctx);
+			mbedtls_ssl_config_free(&ssl.config);
 
-			x509_crt_free(&ssl.cacert);
-			x509_crt_free(&ssl.clicert);
+			mbedtls_x509_crt_free(&ssl.cacert);
+			mbedtls_x509_crt_free(&ssl.clicert);
 
-			memset(&ssl.ctx, 0, sizeof(ssl_context));
-			memset(&ssl.session, 0, sizeof(ssl_session));
-			memset(&ssl.entropy, 0, sizeof(entropy_context));
-			memset(ssl.hostname, 0, NET_SSL_MAX_HOSTNAME_LEN);
+			ssl.hostname.clear();
 
 			ssl.active = false;
 		}
 	}
 }
 
-int CWII_IPC_HLE_Device_net_ssl::getSSLFreeID()
+int CWII_IPC_HLE_Device_net_ssl::GetSSLFreeID() const
 {
 	for (int i = 0; i < NET_SSL_MAXINSTANCES; i++)
 	{
@@ -55,24 +55,24 @@ int CWII_IPC_HLE_Device_net_ssl::getSSLFreeID()
 	return 0;
 }
 
-bool CWII_IPC_HLE_Device_net_ssl::Open(u32 _CommandAddress, u32 _Mode)
+IPCCommandResult CWII_IPC_HLE_Device_net_ssl::Open(u32 _CommandAddress, u32 _Mode)
 {
 	Memory::Write_U32(GetDeviceID(), _CommandAddress+4);
 	m_Active = true;
-	return true;
+	return GetDefaultReply();
 }
 
-bool CWII_IPC_HLE_Device_net_ssl::Close(u32 _CommandAddress, bool _bForce)
+IPCCommandResult CWII_IPC_HLE_Device_net_ssl::Close(u32 _CommandAddress, bool _bForce)
 {
 	if (!_bForce)
 	{
 		Memory::Write_U32(0, _CommandAddress + 4);
 	}
 	m_Active = false;
-	return true;
+	return GetDefaultReply();
 }
 
-bool CWII_IPC_HLE_Device_net_ssl::IOCtl(u32 _CommandAddress)
+IPCCommandResult CWII_IPC_HLE_Device_net_ssl::IOCtl(u32 _CommandAddress)
 {
 	u32 BufferIn      = Memory::Read_U32(_CommandAddress + 0x10);
 	u32 BufferInSize  = Memory::Read_U32(_CommandAddress + 0x14);
@@ -85,10 +85,10 @@ bool CWII_IPC_HLE_Device_net_ssl::IOCtl(u32 _CommandAddress)
 	         GetDeviceName().c_str(), Command,
 	         BufferIn, BufferInSize, BufferOut, BufferOutSize);
 	Memory::Write_U32(0, _CommandAddress + 0x4);
-	return true;
+	return GetDefaultReply();
 }
 
-bool CWII_IPC_HLE_Device_net_ssl::IOCtlV(u32 _CommandAddress)
+IPCCommandResult CWII_IPC_HLE_Device_net_ssl::IOCtlV(u32 _CommandAddress)
 {
 	SIOCtlVBuffer CommandBuffer(_CommandAddress);
 
@@ -130,55 +130,56 @@ bool CWII_IPC_HLE_Device_net_ssl::IOCtlV(u32 _CommandAddress)
 		BufferOutSize3 = CommandBuffer.PayloadBuffer.at(2).m_Size;
 	}
 
+	// I don't trust SSL to be deterministic, and this is never going to sync
+	// as such (as opposed to forwarding IPC results or whatever), so -
+	if (Core::g_want_determinism)
+	{
+		Memory::Write_U32(-1, _CommandAddress + 0x4);
+		return GetDefaultReply();
+	}
+
 	switch (CommandBuffer.Parameter)
 	{
 	case IOCTLV_NET_SSL_NEW:
 	{
 		int verifyOption = Memory::Read_U32(BufferOut);
-		const char * hostname = (const char*) Memory::GetPointer(BufferOut2);
+		std::string hostname = Memory::GetString(BufferOut2, BufferOutSize2);
 
-		int freeSSL = this->getSSLFreeID();
+		int freeSSL = GetSSLFreeID();
 		if (freeSSL)
 		{
 			int sslID = freeSSL - 1;
 			WII_SSL* ssl = &_SSL[sslID];
-			int ret = ssl_init(&ssl->ctx);
-			if (ret)
-			{
-				// Cleanup possibly dirty ctx
-				memset(&ssl->ctx, 0, sizeof(ssl_context));
-				goto _SSL_NEW_ERROR;
-			}
-
-			entropy_init(&ssl->entropy);
+			mbedtls_ssl_init(&ssl->ctx);
+			mbedtls_entropy_init(&ssl->entropy);
 			const char* pers = "dolphin-emu";
-			ret = ctr_drbg_init(&ssl->ctr_drbg, entropy_func,
-			                    &ssl->entropy,
-			                    (const unsigned char*)pers,
-			                    strlen(pers));
+			mbedtls_ctr_drbg_init(&ssl->ctr_drbg);
+			int ret = mbedtls_ctr_drbg_seed(&ssl->ctr_drbg, mbedtls_entropy_func,
+			                                &ssl->entropy,
+			                                (const unsigned char*)pers,
+			                                strlen(pers));
 			if (ret)
 			{
-				ssl_free(&ssl->ctx);
-				// Cleanup possibly dirty ctx
-				memset(&ssl->ctx, 0, sizeof(ssl_context));
-				entropy_free(&ssl->entropy);
+				mbedtls_ssl_free(&ssl->ctx);
+				mbedtls_entropy_free(&ssl->entropy);
 				goto _SSL_NEW_ERROR;
 			}
 
-			ssl_set_rng(&ssl->ctx, ctr_drbg_random, &ssl->ctr_drbg);
+			mbedtls_ssl_config_init(&ssl->config);
+			mbedtls_ssl_config_defaults(&ssl->config, MBEDTLS_SSL_IS_CLIENT,
+			                            MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+			mbedtls_ssl_conf_rng(&ssl->config, mbedtls_ctr_drbg_random, &ssl->ctr_drbg);
 
 			// For some reason we can't use TLSv1.2, v1.1 and below are fine!
-			ssl_set_max_version(&ssl->ctx, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_2);
+			mbedtls_ssl_conf_max_version(&ssl->config, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_2);
 
-			ssl_set_session(&ssl->ctx, &ssl->session);
+			mbedtls_ssl_set_session(&ssl->ctx, &ssl->session);
 
-			ssl_set_endpoint(&ssl->ctx, SSL_IS_CLIENT);
-			ssl_set_authmode(&ssl->ctx, SSL_VERIFY_NONE);
-			ssl_set_renegotiation(&ssl->ctx, SSL_RENEGOTIATION_ENABLED);
+			mbedtls_ssl_conf_authmode(&ssl->config, MBEDTLS_SSL_VERIFY_NONE);
+			mbedtls_ssl_conf_renegotiation(&ssl->config, MBEDTLS_SSL_RENEGOTIATION_ENABLED);
 
-			memcpy(ssl->hostname, hostname, std::min((int)BufferOutSize2, NET_SSL_MAX_HOSTNAME_LEN));
-			ssl->hostname[NET_SSL_MAX_HOSTNAME_LEN-1] = '\0';
-			ssl_set_hostname(&ssl->ctx, ssl->hostname);
+			ssl->hostname = hostname;
+			mbedtls_ssl_set_hostname(&ssl->ctx, ssl->hostname.c_str());
 
 			ssl->active = true;
 			Memory::Write_U32(freeSSL, _BufferIn);
@@ -193,7 +194,7 @@ _SSL_NEW_ERROR:
 			"BufferIn: (%08x, %i), BufferIn2: (%08x, %i), "
 			"BufferIn3: (%08x, %i), BufferOut: (%08x, %i), "
 			"BufferOut2: (%08x, %i), BufferOut3: (%08x, %i)",
-			verifyOption, hostname,
+			verifyOption, hostname.c_str(),
 			_BufferIn, BufferInSize, _BufferIn2, BufferInSize2,
 			_BufferIn3, BufferInSize3, BufferOut, BufferOutSize,
 			BufferOut2, BufferOutSize2, BufferOut3, BufferOutSize3);
@@ -205,19 +206,17 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
-			ssl_close_notify(&ssl->ctx);
-			ssl_session_free(&ssl->session);
-			ssl_free(&ssl->ctx);
+			mbedtls_ssl_close_notify(&ssl->ctx);
+			mbedtls_ssl_session_free(&ssl->session);
+			mbedtls_ssl_free(&ssl->ctx);
+			mbedtls_ssl_config_free(&ssl->config);
 
-			entropy_free(&ssl->entropy);
+			mbedtls_entropy_free(&ssl->entropy);
 
-			x509_crt_free(&ssl->cacert);
-			x509_crt_free(&ssl->clicert);
+			mbedtls_x509_crt_free(&ssl->cacert);
+			mbedtls_x509_crt_free(&ssl->clicert);
 
-			memset(&ssl->ctx, 0, sizeof(ssl_context));
-			memset(&ssl->session, 0, sizeof(ssl_session));
-			memset(&ssl->entropy, 0, sizeof(entropy_context));
-			memset(ssl->hostname, 0, NET_SSL_MAX_HOSTNAME_LEN);
+			ssl->hostname.clear();
 
 			ssl->active = false;
 
@@ -251,7 +250,7 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
-			int ret = x509_crt_parse_der(
+			int ret = mbedtls_x509_crt_parse_der(
 				&ssl->cacert,
 				Memory::GetPointer(BufferOut2),
 				BufferOutSize2);
@@ -262,7 +261,7 @@ _SSL_NEW_ERROR:
 			}
 			else
 			{
-				ssl_set_ca_chain(&ssl->ctx, &ssl->cacert, nullptr, ssl->hostname);
+				mbedtls_ssl_conf_ca_chain(&ssl->config, &ssl->cacert, nullptr);
 				Memory::Write_U32(SSL_OK, _BufferIn);
 			}
 
@@ -288,20 +287,18 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
-			std::string cert_base_path(File::GetUserPath(D_WIIUSER_IDX));
-			int ret = x509_crt_parse_file(&ssl->clicert, (cert_base_path + "clientca.pem").c_str());
-			int pk_ret = pk_parse_keyfile(&ssl->pk, (cert_base_path + "clientcakey.pem").c_str(), nullptr);
+			std::string cert_base_path = File::GetUserPath(D_SESSION_WIIROOT_IDX);
+			int ret = mbedtls_x509_crt_parse_file(&ssl->clicert, (cert_base_path + "/clientca.pem").c_str());
+			int pk_ret = mbedtls_pk_parse_keyfile(&ssl->pk, (cert_base_path + "/clientcakey.pem").c_str(), nullptr);
 			if (ret || pk_ret)
 			{
-				x509_crt_free(&ssl->clicert);
-				pk_free(&ssl->pk);
-				memset(&ssl->clicert, 0, sizeof(x509_crt));
-				memset(&ssl->pk, 0, sizeof(pk_context));
+				mbedtls_x509_crt_free(&ssl->clicert);
+				mbedtls_pk_free(&ssl->pk);
 				Memory::Write_U32(SSL_ERR_FAILED, _BufferIn);
 			}
 			else
 			{
-				ssl_set_own_cert(&ssl->ctx, &ssl->clicert, &ssl->pk);
+				mbedtls_ssl_conf_own_cert(&ssl->config, &ssl->clicert, &ssl->pk);
 				Memory::Write_U32(SSL_OK, _BufferIn);
 			}
 
@@ -328,12 +325,10 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
-			x509_crt_free(&ssl->clicert);
-			pk_free(&ssl->pk);
-			memset(&ssl->clicert, 0, sizeof(x509_crt));
-			memset(&ssl->pk, 0, sizeof(pk_context));
+			mbedtls_x509_crt_free(&ssl->clicert);
+			mbedtls_pk_free(&ssl->pk);
 
-			ssl_set_own_cert(&ssl->ctx, nullptr, nullptr);
+			mbedtls_ssl_conf_own_cert(&ssl->config, nullptr, nullptr);
 			Memory::Write_U32(SSL_OK, _BufferIn);
 		}
 		else
@@ -349,17 +344,16 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
-			std::string cert_base_path(File::GetUserPath(D_WIIUSER_IDX));
 
-			int ret = x509_crt_parse_file(&ssl->cacert, (cert_base_path + "rootca.pem").c_str());
+			int ret = mbedtls_x509_crt_parse_file(&ssl->cacert, (File::GetUserPath(D_SESSION_WIIROOT_IDX) + "/rootca.pem").c_str());
 			if (ret)
 			{
-				x509_crt_free(&ssl->clicert);
+				mbedtls_x509_crt_free(&ssl->clicert);
 				Memory::Write_U32(SSL_ERR_FAILED, _BufferIn);
 			}
 			else
 			{
-				ssl_set_ca_chain(&ssl->ctx, &ssl->cacert, nullptr, ssl->hostname);
+				mbedtls_ssl_conf_ca_chain(&ssl->config, &ssl->cacert, nullptr);
 				Memory::Write_U32(SSL_OK, _BufferIn);
 			}
 			INFO_LOG(WII_IPC_SSL, "IOCTLV_NET_SSL_SETBUILTINROOTCA = %d", ret);
@@ -383,9 +377,11 @@ _SSL_NEW_ERROR:
 		if (SSLID_VALID(sslID))
 		{
 			WII_SSL* ssl = &_SSL[sslID];
+			mbedtls_ssl_setup(&ssl->ctx, &ssl->config);
 			ssl->sockfd = Memory::Read_U32(BufferOut2);
 			INFO_LOG(WII_IPC_SSL, "IOCTLV_NET_SSL_CONNECT socket = %d", ssl->sockfd);
-			ssl_set_bio(&ssl->ctx, net_recv, &ssl->sockfd, net_send, &ssl->sockfd);
+			mbedtls_ssl_set_bio(&ssl->ctx, &ssl->sockfd, mbedtls_net_send,
+			                    mbedtls_net_recv, nullptr);
 			Memory::Write_U32(SSL_OK, _BufferIn);
 		}
 		else
@@ -408,7 +404,7 @@ _SSL_NEW_ERROR:
 		{
 			WiiSockMan &sm = WiiSockMan::GetInstance();
 			sm.DoSock(_SSL[sslID].sockfd, _CommandAddress, IOCTLV_NET_SSL_DOHANDSHAKE);
-			return false;
+			return GetNoReply();
 		}
 		else
 		{
@@ -423,7 +419,7 @@ _SSL_NEW_ERROR:
 		{
 			WiiSockMan &sm = WiiSockMan::GetInstance();
 			sm.DoSock(_SSL[sslID].sockfd, _CommandAddress, IOCTLV_NET_SSL_WRITE);
-			return false;
+			return GetNoReply();
 		}
 		else
 		{
@@ -436,7 +432,7 @@ _SSL_NEW_ERROR:
 			_BufferIn, BufferInSize, _BufferIn2, BufferInSize2,
 			_BufferIn3, BufferInSize3, BufferOut, BufferOutSize,
 			BufferOut2, BufferOutSize2, BufferOut3, BufferOutSize3);
-		INFO_LOG(WII_IPC_SSL, "%s", Memory::GetPointer(BufferOut2));
+		INFO_LOG(WII_IPC_SSL, "%s", Memory::GetString(BufferOut2).c_str());
 		break;
 	}
 	case IOCTLV_NET_SSL_READ:
@@ -448,7 +444,7 @@ _SSL_NEW_ERROR:
 		{
 			WiiSockMan &sm = WiiSockMan::GetInstance();
 			sm.DoSock(_SSL[sslID].sockfd, _CommandAddress, IOCTLV_NET_SSL_READ);
-			return false;
+			return GetNoReply();
 		}
 		else
 		{
@@ -521,6 +517,6 @@ _SSL_NEW_ERROR:
 	// SSL return codes are written to BufferIn
 	Memory::Write_U32(0, _CommandAddress+4);
 
-	return true;
+	return GetDefaultReply();
 }
 

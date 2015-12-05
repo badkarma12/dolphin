@@ -1,36 +1,36 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
+#include "Common/GL/GLExtensions/GLExtensions.h"
+
 #include "VideoCommon/CPMemory.h"
+#include "VideoCommon/NativeVertexFormat.h"
 #include "VideoCommon/VertexManagerBase.h"
 
 namespace OGL
 {
 	class GLVertexFormat : public NativeVertexFormat
 	{
-		PortableVertexDeclaration vtx_decl;
-
 	public:
-		GLVertexFormat();
+		GLVertexFormat(const PortableVertexDeclaration& vtx_decl);
 		~GLVertexFormat();
 
-		virtual void Initialize(const PortableVertexDeclaration &_vtx_decl) override;
-		virtual void SetupVertexPointers() override;
+		void SetupVertexPointers() override;
 
 		GLuint VAO;
 	};
 
 // Handles the OpenGL details of drawing lots of vertices quickly.
 // Other functionality is moving out.
-class VertexManager : public ::VertexManager
+class VertexManager : public VertexManagerBase
 {
 public:
 	VertexManager();
 	~VertexManager();
-	NativeVertexFormat* CreateNativeVertexFormat() override;
+	NativeVertexFormat* CreateNativeVertexFormat(const PortableVertexDeclaration& vtx_decl) override;
 	void CreateDeviceObjects() override;
 	void DestroyDeviceObjects() override;
 
@@ -39,11 +39,16 @@ public:
 	GLuint m_index_buffers;
 	GLuint m_last_vao;
 protected:
-	virtual void ResetBuffer(u32 stride) override;
+	void ResetBuffer(u32 stride) override;
+
 private:
 	void Draw(u32 stride);
 	void vFlush(bool useDstAlpha) override;
 	void PrepareDrawBuffers(u32 stride);
+
+	// Alternative buffers in CPU memory for primatives we are going to discard.
+	std::vector<u8> m_cpu_v_buffer;
+	std::vector<u16> m_cpu_i_buffer;
 };
 
 }

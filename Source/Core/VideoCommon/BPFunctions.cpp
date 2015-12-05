@@ -1,15 +1,14 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
 
 #include "VideoCommon/BPFunctions.h"
 #include "VideoCommon/RenderBase.h"
-#include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
@@ -24,7 +23,7 @@ namespace BPFunctions
 
 void FlushPipeline()
 {
-	VertexManager::Flush();
+	VertexManagerBase::Flush();
 }
 
 void SetGenerationMode()
@@ -62,11 +61,6 @@ void SetScissor()
 	g_renderer->SetScissorRect(rc);
 }
 
-void SetLineWidth()
-{
-	g_renderer->SetLineWidth();
-}
-
 void SetDepthMode()
 {
 	g_renderer->SetDepthMode();
@@ -90,18 +84,6 @@ void SetColorMask()
 	g_renderer->SetColorMask();
 }
 
-void CopyEFB(u32 dstAddr, const EFBRectangle& srcRect,
-	     unsigned int dstFormat, PEControl::PixelFormat srcFormat,
-	     bool isIntensity, bool scaleByHalf)
-{
-	// bpmem.zcontrol.pixel_format to PEControl::Z24 is when the game wants to copy from ZBuffer (Zbuffer uses 24-bit Format)
-	if (g_ActiveConfig.bEFBCopyEnable)
-	{
-		TextureCache::CopyRenderTargetToTexture(dstAddr, dstFormat, srcFormat,
-			srcRect, isIntensity, scaleByHalf);
-	}
-}
-
 /* Explanation of the magic behind ClearScreen:
 	There's numerous possible formats for the pixel data in the EFB.
 	However, in the HW accelerated backends we're always using RGBA8
@@ -120,9 +102,9 @@ void CopyEFB(u32 dstAddr, const EFBRectangle& srcRect,
 */
 void ClearScreen(const EFBRectangle &rc)
 {
-	bool colorEnable = bpmem.blendmode.colorupdate;
-	bool alphaEnable = bpmem.blendmode.alphaupdate;
-	bool zEnable = bpmem.zmode.updateenable;
+	bool colorEnable = (bpmem.blendmode.colorupdate != 0);
+	bool alphaEnable = (bpmem.blendmode.alphaupdate != 0);
+	bool zEnable = (bpmem.zmode.updateenable != 0);
 	auto pixel_format = bpmem.zcontrol.pixel_format;
 
 	// (1): Disable unused color channels

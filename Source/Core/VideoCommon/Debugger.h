@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -12,8 +12,8 @@ public:
 	virtual ~GFXDebuggerBase() {}
 
 	// if paused, debugging functions can be enabled
-	virtual void OnPause() {};
-	virtual void OnContinue() {};
+	virtual void OnPause() {}
+	virtual void OnContinue() {}
 
 	void DumpPixelShader(const std::string& path);
 	void DumpVertexShader(const std::string& path);

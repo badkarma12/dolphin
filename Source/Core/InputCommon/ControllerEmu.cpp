@@ -1,7 +1,9 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <memory>
+#include "Common/Common.h"
 #include "InputCommon/ControllerEmu.h"
 
 void ControllerEmu::UpdateReferences(ControllerInterface& devi)
@@ -38,12 +40,14 @@ void ControllerEmu::UpdateDefaultDevice()
 
 void ControllerEmu::ControlGroup::LoadConfig(IniFile::Section *sec, const std::string& defdev, const std::string& base)
 {
-	std::string group(base + name); group += "/";
+	std::string group(base + name + "/");
 
 	// settings
 	for (auto& s : settings)
 	{
 		if (s->is_virtual)
+			continue;
+		if (s->is_iterate)
 			continue;
 		sec->Get(group + s->name, &s->value, s->default_value * 100);
 		s->value /= 100;
@@ -55,7 +59,7 @@ void ControllerEmu::ControlGroup::LoadConfig(IniFile::Section *sec, const std::s
 		sec->Get(group + c->name, &c->control_ref->expression, "");
 
 		// range
-		sec->Get(group + c->name + "/Range", &c->control_ref->range, 100.0f);
+		sec->Get(group + c->name + "/Range", &c->control_ref->range, 100.0);
 		c->control_ref->range /= 100;
 
 	}
@@ -98,13 +102,16 @@ void ControllerEmu::LoadConfig(IniFile::Section *sec, const std::string& base)
 
 void ControllerEmu::ControlGroup::SaveConfig(IniFile::Section *sec, const std::string& defdev, const std::string& base)
 {
-	std::string group(base + name); group += "/";
+	std::string group(base + name + "/");
 
 	for (auto& s : settings)
 	{
 		if (s->is_virtual)
 			continue;
-		sec->Set(group + s->name, s->value*100.0f, s->default_value*100.0f);
+		if (s->is_iterate)
+			continue;
+
+		sec->Set(group + s->name, s->value * 100.0, s->default_value * 100.0);
 	}
 
 	for (auto& c : controls)
@@ -113,7 +120,7 @@ void ControllerEmu::ControlGroup::SaveConfig(IniFile::Section *sec, const std::s
 		sec->Set(group + c->name, c->control_ref->expression, "");
 
 		// range
-		sec->Set(group + c->name + "/Range", c->control_ref->range*100.0f, 100.0f);
+		sec->Set(group + c->name + "/Range", c->control_ref->range*100.0, 100.0);
 	}
 
 	// extensions
@@ -137,72 +144,77 @@ void ControllerEmu::SaveConfig(IniFile::Section *sec, const std::string& base)
 		ctrlGroup->SaveConfig(sec, defdev, base);
 }
 
-ControllerEmu::AnalogStick::AnalogStick(const char* const _name) : ControlGroup(_name, GROUP_TYPE_STICK)
+void ControllerEmu::ControlGroup::SetControlExpression(int index, const std::string& expression)
+{
+	controls.at(index)->control_ref->expression = expression;
+}
+
+ControllerEmu::AnalogStick::AnalogStick(const char* const _name, ControlState default_radius)
+	: AnalogStick(_name, _name, GROUP_TYPE_STICK)
+{}
+
+ControllerEmu::AnalogStick::AnalogStick(const char* const _name, const char* const _ui_name, ControlState default_radius)
+	: ControlGroup(_name, _ui_name, GROUP_TYPE_STICK)
 {
 	for (auto& named_direction : named_directions)
-		controls.emplace_back(new Input(named_direction));
+		controls.emplace_back(std::make_unique<Input>(named_direction));
 
-	controls.emplace_back(new Input(_trans("Modifier")));
-
-	// Default to 100 radius for everything but gcpad.
-	if (name == "Stick" || name == "Left Stick" || name == "Right Stick")
-		settings.emplace_back(new Setting(_trans("Radius"), 1.0f, 0, 100));
-	else
-		settings.emplace_back(new Setting(_trans("Radius"), 0.7f, 0, 100));
-	settings.emplace_back(new Setting(_trans("Dead Zone"), 0, 0, 50));
+	controls.emplace_back(std::make_unique<Input>(_trans("Modifier")));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Radius"), default_radius, 0, 100));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Dead Zone"), 0, 0, 50));
 }
 
 ControllerEmu::Buttons::Buttons(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_BUTTONS)
 {
-	settings.emplace_back(new Setting(_trans("Threshold"), 0.5f));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Threshold"), 0.5));
 }
 
 ControllerEmu::MixedTriggers::MixedTriggers(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_MIXED_TRIGGERS)
 {
-	settings.emplace_back(new Setting(_trans("Threshold"), 0.9f));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Threshold"), 0.9));
 }
 
 ControllerEmu::Triggers::Triggers(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_TRIGGERS)
 {
-	settings.emplace_back(new Setting(_trans("Dead Zone"), 0, 0, 50));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Dead Zone"), 0, 0, 50));
 }
 
 ControllerEmu::Slider::Slider(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_SLIDER)
 {
-	controls.emplace_back(new Input("Left"));
-	controls.emplace_back(new Input("Right"));
+	controls.emplace_back(std::make_unique<Input>("Left"));
+	controls.emplace_back(std::make_unique<Input>("Right"));
 
-	settings.emplace_back(new Setting(_trans("Dead Zone"), 0, 0, 50));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Dead Zone"), 0, 0, 50));
 }
 
 ControllerEmu::Force::Force(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_FORCE)
 {
 	memset(m_swing, 0, sizeof(m_swing));
 
-	controls.emplace_back(new Input(_trans("Up")));
-	controls.emplace_back(new Input(_trans("Down")));
-	controls.emplace_back(new Input(_trans("Left")));
-	controls.emplace_back(new Input(_trans("Right")));
-	controls.emplace_back(new Input(_trans("Forward")));
-	controls.emplace_back(new Input(_trans("Backward")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Up")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Down")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Left")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Right")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Forward")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Backward")));
 
-	settings.emplace_back(new Setting(_trans("Dead Zone"), 0, 0, 50));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Dead Zone"), 0, 0, 50));
 }
 
 ControllerEmu::Tilt::Tilt(const std::string& _name) : ControlGroup(_name, GROUP_TYPE_TILT)
 {
 	memset(m_tilt, 0, sizeof(m_tilt));
 
-	controls.emplace_back(new Input("Forward"));
-	controls.emplace_back(new Input("Backward"));
-	controls.emplace_back(new Input("Left"));
-	controls.emplace_back(new Input("Right"));
+	controls.emplace_back(std::make_unique<Input>("Forward"));
+	controls.emplace_back(std::make_unique<Input>("Backward"));
+	controls.emplace_back(std::make_unique<Input>("Left"));
+	controls.emplace_back(std::make_unique<Input>("Right"));
 
-	controls.emplace_back(new Input(_trans("Modifier")));
+	controls.emplace_back(std::make_unique<Input>(_trans("Modifier")));
 
-	settings.emplace_back(new Setting(_trans("Dead Zone"), 0, 0, 50));
-	settings.emplace_back(new Setting(_trans("Circle Stick"), 0));
-	settings.emplace_back(new Setting(_trans("Angle"), 0.9f, 0, 180));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Dead Zone"), 0, 0, 50));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Circle Stick"), 0));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Angle"), 0.9, 0, 180));
 }
 
 ControllerEmu::Cursor::Cursor(const std::string& _name)
@@ -210,15 +222,14 @@ ControllerEmu::Cursor::Cursor(const std::string& _name)
 	, m_z(0)
 {
 	for (auto& named_direction : named_directions)
-		controls.emplace_back(new Input(named_direction));
-	controls.emplace_back(new Input("Forward"));
-	controls.emplace_back(new Input("Backward"));
-	controls.emplace_back(new Input(_trans("Hide")));
+		controls.emplace_back(std::make_unique<Input>(named_direction));
+	controls.emplace_back(std::make_unique<Input>("Forward"));
+	controls.emplace_back(std::make_unique<Input>("Backward"));
+	controls.emplace_back(std::make_unique<Input>(_trans("Hide")));
 
-	settings.emplace_back(new Setting(_trans("Center"), 0.5f));
-	settings.emplace_back(new Setting(_trans("Width"), 0.5f));
-	settings.emplace_back(new Setting(_trans("Height"), 0.5f));
-
+	settings.emplace_back(std::make_unique<Setting>(_trans("Center"), 0.5));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Width"), 0.5));
+	settings.emplace_back(std::make_unique<Setting>(_trans("Height"), 0.5));
 }
 
 void ControllerEmu::LoadDefaults(const ControllerInterface &ciface)

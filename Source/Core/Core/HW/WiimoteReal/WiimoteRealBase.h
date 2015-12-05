@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -15,6 +15,8 @@
 	#define NS_ENUM_AVAILABLE(...)
 	// end hack
 	#import <IOBluetooth/IOBluetooth.h>
+	#include <IOKit/pwr_mgt/IOPMLib.h>
+	#include <IOKit/hid/IOHIDManager.h>
 #elif defined(__linux__) && HAVE_BLUEZ
 	#include <bluetooth/bluetooth.h>
 #endif

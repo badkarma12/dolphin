@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2014 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -10,6 +10,8 @@
 
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
+
+#include "VideoCommon/VideoCommon.h"
 
 class PostProcessingShaderConfiguration
 {
@@ -66,9 +68,9 @@ public:
 	const ConfigurationOption& GetOption(const std::string& option) { return m_options[option]; }
 
 	// For updating option's values
-	void SetOptionf(std::string option, int index, float value);
-	void SetOptioni(std::string option, int index, s32 value);
-	void SetOptionb(std::string option, bool value);
+	void SetOptionf(const std::string& option, int index, float value);
+	void SetOptioni(const std::string& option, int index, s32 value);
+	void SetOptionb(const std::string& option, bool value);
 
 private:
 	bool m_any_options_dirty;
@@ -88,15 +90,11 @@ public:
 	PostProcessingShaderConfiguration* GetConfig() { return &m_config; }
 
 	// Should be implemented by the backends for backend specific code
-	virtual void BindTargetFramebuffer() = 0;
-	virtual void BlitToScreen() = 0;
-	virtual void Update(u32 width, u32 height) = 0;
+	virtual void BlitFromTexture(TargetRectangle src, TargetRectangle dst,
+	                             int src_texture, int src_width, int src_height, int layer = 0) = 0;
 	virtual void ApplyShader() = 0;
 
 protected:
-	bool m_enable;
-	u32 m_width;
-	u32 m_height;
 	// Timer for determining our time value
 	Common::Timer m_timer;
 

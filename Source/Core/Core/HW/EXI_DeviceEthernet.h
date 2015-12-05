@@ -1,14 +1,19 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
+
+#include <atomic>
 
 #ifdef _WIN32
 #include <Windows.h>
 #endif
 
 #include "Common/Thread.h"
+#include "Core/HW/EXI_Device.h"
+
+class PointerWrap;
 
 // Network Control Register A
 enum NCRA
@@ -155,7 +160,10 @@ enum
 	BBA_MEM_SIZE  = BBA_NUM_PAGES * BBA_PAGE_SIZE
 };
 
-enum { EXI_DEVTYPE_ETHER = 0x04020200 };
+enum
+{
+	EXI_DEVTYPE_ETHER = 0x04020200
+};
 
 enum SendStatus
 {
@@ -189,7 +197,7 @@ public:
 	CEXIETHERNET();
 	virtual ~CEXIETHERNET();
 	void SetCS(int cs) override;
-	bool IsPresent() override;
+	bool IsPresent() const override;
 	bool IsInterruptSet() override;
 	void ImmWrite(u32 data,  u32 size) override;
 	u32  ImmRead(u32 size) override;
@@ -319,10 +327,10 @@ public:
 	DWORD mMtu;
 	OVERLAPPED mReadOverlapped;
 	static VOID CALLBACK ReadWaitCallback(PVOID lpParameter, BOOLEAN TimerFired);
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 	int fd;
 	std::thread readThread;
-	volatile bool readEnabled;
+	std::atomic<bool> readEnabled;
 #endif
 
 };

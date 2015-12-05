@@ -1,11 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cstdio>
 #include <string>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 
 #include "Core/Debugger/Dump.h"
@@ -24,7 +24,7 @@ CDump::CDump(const std::string& filename) :
 	}
 }
 
-CDump::~CDump(void)
+CDump::~CDump()
 {
 	if (m_pData != nullptr)
 	{
@@ -33,7 +33,7 @@ CDump::~CDump(void)
 	}
 }
 
-int CDump::GetNumberOfSteps(void)
+int CDump::GetNumberOfSteps()
 {
 	return (int)(m_size / STRUCTUR_SIZE);
 }

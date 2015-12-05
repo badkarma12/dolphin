@@ -1,8 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "Common/Common.h"
+#include "Common/ChunkFile.h"
+#include "Common/CommonTypes.h"
+#include "Common/FileUtil.h"
 #include "Common/SDCardUtil.h"
 
 #include "Core/ConfigManager.h"
@@ -59,7 +61,7 @@ void CWII_IPC_HLE_Device_sdio_slot0::EventNotify()
 
 void CWII_IPC_HLE_Device_sdio_slot0::OpenInternal()
 {
-	const std::string filename = File::GetUserPath(D_WIIUSER_IDX) + "sd.raw";
+	const std::string filename = File::GetUserPath(D_WIIROOT_IDX) + "/sd.raw";
 	m_Card.Open(filename, "r+b");
 	if (!m_Card)
 	{
@@ -76,7 +78,7 @@ void CWII_IPC_HLE_Device_sdio_slot0::OpenInternal()
 	}
 }
 
-bool CWII_IPC_HLE_Device_sdio_slot0::Open(u32 _CommandAddress, u32 _Mode)
+IPCCommandResult CWII_IPC_HLE_Device_sdio_slot0::Open(u32 _CommandAddress, u32 _Mode)
 {
 	INFO_LOG(WII_IPC_SD, "Open");
 
@@ -85,10 +87,10 @@ bool CWII_IPC_HLE_Device_sdio_slot0::Open(u32 _CommandAddress, u32 _Mode)
 	Memory::Write_U32(GetDeviceID(), _CommandAddress + 0x4);
 	memset(m_Registers, 0, sizeof(m_Registers));
 	m_Active = true;
-	return true;
+	return GetDefaultReply();
 }
 
-bool CWII_IPC_HLE_Device_sdio_slot0::Close(u32 _CommandAddress, bool _bForce)
+IPCCommandResult CWII_IPC_HLE_Device_sdio_slot0::Close(u32 _CommandAddress, bool _bForce)
 {
 	INFO_LOG(WII_IPC_SD, "Close");
 
@@ -99,11 +101,11 @@ bool CWII_IPC_HLE_Device_sdio_slot0::Close(u32 _CommandAddress, bool _bForce)
 	if (!_bForce)
 		Memory::Write_U32(0, _CommandAddress + 0x4);
 	m_Active = false;
-	return true;
+	return GetDefaultReply();
 }
 
 // The front SD slot
-bool CWII_IPC_HLE_Device_sdio_slot0::IOCtl(u32 _CommandAddress)
+IPCCommandResult CWII_IPC_HLE_Device_sdio_slot0::IOCtl(u32 _CommandAddress)
 {
 	u32 Cmd = Memory::Read_U32(_CommandAddress + 0xC);
 
@@ -226,7 +228,7 @@ bool CWII_IPC_HLE_Device_sdio_slot0::IOCtl(u32 _CommandAddress)
 		Memory::Write_U32(0, _CommandAddress + 0x4);
 		// Check if the condition is already true
 		EventNotify();
-		return false;
+		return GetNoReply();
 	}
 	else if (ReturnValue == RET_EVENT_UNREGISTER)
 	{
@@ -237,16 +239,16 @@ bool CWII_IPC_HLE_Device_sdio_slot0::IOCtl(u32 _CommandAddress)
 		m_event.addr = 0;
 		m_event.type = EVENT_NONE;
 		Memory::Write_U32(0, _CommandAddress + 0x4);
-		return true;
+		return GetDefaultReply();
 	}
 	else
 	{
 		Memory::Write_U32(ReturnValue, _CommandAddress + 0x4);
-		return true;
+		return GetDefaultReply();
 	}
 }
 
-bool CWII_IPC_HLE_Device_sdio_slot0::IOCtlV(u32 _CommandAddress)
+IPCCommandResult CWII_IPC_HLE_Device_sdio_slot0::IOCtlV(u32 _CommandAddress)
 {
 	// PPC sending commands
 
@@ -261,7 +263,8 @@ bool CWII_IPC_HLE_Device_sdio_slot0::IOCtlV(u32 _CommandAddress)
 	}
 
 	u32 ReturnValue = 0;
-	switch (CommandBuffer.Parameter) {
+	switch (CommandBuffer.Parameter)
+	{
 	case IOCTLV_SENDCMD:
 		INFO_LOG(WII_IPC_SD, "IOCTLV_SENDCMD 0x%08x", Memory::Read_U32(CommandBuffer.InBuffer[0].m_Address));
 		ReturnValue = ExecuteCommand(
@@ -279,7 +282,7 @@ bool CWII_IPC_HLE_Device_sdio_slot0::IOCtlV(u32 _CommandAddress)
 
 	Memory::Write_U32(ReturnValue, _CommandAddress + 0x4);
 
-	return true;
+	return GetDefaultReply();
 }
 
 u32 CWII_IPC_HLE_Device_sdio_slot0::ExecuteCommand(u32 _BufferIn, u32 _BufferInSize,
@@ -288,7 +291,8 @@ u32 CWII_IPC_HLE_Device_sdio_slot0::ExecuteCommand(u32 _BufferIn, u32 _BufferInS
 {
 	// The game will send us a SendCMD with this information. To be able to read and write
 	// to a file we need to prepare a 0x10 byte output buffer as response.
-	struct Request {
+	struct Request
+	{
 		u32 command;
 		u32 type;
 		u32 resp;
@@ -419,7 +423,7 @@ u32 CWII_IPC_HLE_Device_sdio_slot0::ExecuteCommand(u32 _BufferIn, u32 _BufferInS
 		DEBUG_LOG(WII_IPC_SD, "%sWrite %i Block(s) from 0x%08x bsize %i to offset 0x%08x!",
 			req.isDMA ? "DMA " : "", req.blocks, req.addr, req.bsize, req.arg);
 
-		if (m_Card)
+		if (m_Card && SConfig::GetInstance().bEnableMemcardSdWriting)
 		{
 			u32 size = req.bsize * req.blocks;
 

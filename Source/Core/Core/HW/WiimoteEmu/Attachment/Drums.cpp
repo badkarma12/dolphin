@@ -1,7 +1,9 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Common/Common.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/HW/WiimoteEmu/Attachment/Drums.h"
 
 namespace WiimoteEmu
@@ -39,7 +41,7 @@ Drums::Drums(WiimoteEmu::ExtensionReg& _reg) : Attachment(_trans("Drums"), _reg)
 		m_pads->controls.emplace_back(new ControlGroup::Input(drum_pad_name));
 
 	// stick
-	groups.emplace_back(m_stick = new AnalogStick("Stick"));
+	groups.emplace_back(m_stick = new AnalogStick("Stick", DEFAULT_ATTACHMENT_STICK_RADIUS));
 
 	// buttons
 	groups.emplace_back(m_buttons = new Buttons("Buttons"));
@@ -60,11 +62,11 @@ void Drums::GetState(u8* const data)
 
 	// stick
 	{
-	double x, y;
+	ControlState x, y;
 	m_stick->GetState(&x, &y);
 
-	ddata->sx = (x * 0x1F) + 0x20;
-	ddata->sy = (y * 0x1F) + 0x20;
+	ddata->sx = static_cast<u8>((x * 0x1F) + 0x20);
+	ddata->sy = static_cast<u8>((y * 0x1F) + 0x20);
 	}
 
 	// TODO: softness maybe
@@ -78,6 +80,14 @@ void Drums::GetState(u8* const data)
 
 	// flip button bits
 	ddata->bt ^= 0xFFFF;
+}
+
+bool Drums::IsButtonPressed() const
+{
+	u16 buttons = 0;
+	m_buttons->GetState(&buttons, drum_button_bitmasks);
+	m_pads->GetState(&buttons, drum_pad_bitmasks);
+	return buttons != 0;
 }
 
 }

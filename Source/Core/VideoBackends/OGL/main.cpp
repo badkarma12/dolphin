@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 
@@ -41,16 +41,18 @@ Make AA apply instantly during gameplay if possible
 
 #include "Common/Atomic.h"
 #include "Common/CommonPaths.h"
+#include "Common/FileSearch.h"
 #include "Common/Thread.h"
+#include "Common/GL/GLInterfaceBase.h"
+#include "Common/GL/GLUtil.h"
 #include "Common/Logging/LogManager.h"
 
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
 
+#include "VideoBackends/OGL/BoundingBox.h"
 #include "VideoBackends/OGL/FramebufferManager.h"
-#include "VideoBackends/OGL/GLInterfaceBase.h"
-#include "VideoBackends/OGL/GLUtil.h"
 #include "VideoBackends/OGL/PerfQuery.h"
 #include "VideoBackends/OGL/PostProcessing.h"
 #include "VideoBackends/OGL/ProgramShaderCache.h"
@@ -64,6 +66,7 @@ Make AA apply instantly during gameplay if possible
 #include "VideoCommon/BPStructs.h"
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/ImageWrite.h"
 #include "VideoCommon/IndexGenerator.h"
 #include "VideoCommon/LookUpTables.h"
@@ -72,7 +75,6 @@ Make AA apply instantly during gameplay if possible
 #include "VideoCommon/OpcodeDecoding.h"
 #include "VideoCommon/PixelEngine.h"
 #include "VideoCommon/PixelShaderManager.h"
-#include "VideoCommon/VertexLoader.h"
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
@@ -80,6 +82,12 @@ Make AA apply instantly during gameplay if possible
 
 namespace OGL
 {
+
+// Draw messages on top of the screen
+unsigned int VideoBackend::PeekMessages()
+{
+	return GLInterface->PeekMessages();
+}
 
 std::string VideoBackend::GetName() const
 {
@@ -94,75 +102,62 @@ std::string VideoBackend::GetDisplayName() const
 		return "OpenGL";
 }
 
-static void GetShaders(std::vector<std::string> &shaders)
+std::string VideoBackend::GetConfigName() const
 {
-	std::set<std::string> already_found;
+	return "gfx_opengl";
+}
 
-	shaders.clear();
-	static const std::string directories[] = {
-		File::GetUserPath(D_SHADERS_IDX),
-		File::GetSysDirectory() + SHADERS_DIR DIR_SEP,
-	};
-	for (auto& directory : directories)
+static std::vector<std::string> GetShaders(const std::string &sub_dir = "")
+{
+	std::vector<std::string> paths = DoFileSearch({".glsl"}, {
+		File::GetUserPath(D_SHADERS_IDX) + sub_dir,
+		File::GetSysDirectory() + SHADERS_DIR DIR_SEP + sub_dir
+	});
+	std::vector<std::string> result;
+	for (std::string path : paths)
 	{
-		if (!File::IsDirectory(directory))
-			continue;
-
-		File::FSTEntry entry;
-		File::ScanDirectoryTree(directory, entry);
-		for (auto& file : entry.children)
-		{
-			std::string name = file.virtualName;
-			if (name.size() < 5)
-				continue;
-			if (strcasecmp(name.substr(name.size() - 5).c_str(), ".glsl"))
-				continue;
-
-			name = name.substr(0, name.size() - 5);
-			if (already_found.find(name) != already_found.end())
-				continue;
-
-			already_found.insert(name);
-			shaders.push_back(name);
-		}
+		std::string name;
+		SplitPath(path, nullptr, &name, nullptr);
+		result.push_back(name);
 	}
-	std::sort(shaders.begin(), shaders.end());
+	return result;
 }
 
 static void InitBackendInfo()
 {
 	g_Config.backend_info.APIType = API_OPENGL;
-	g_Config.backend_info.bUseRGBATextures = true;
-	g_Config.backend_info.bUseMinimalMipCount = false;
 	g_Config.backend_info.bSupportsExclusiveFullscreen = false;
-	//g_Config.backend_info.bSupportsDualSourceBlend = true; // is gpu dependent and must be set in renderer
-	//g_Config.backend_info.bSupportsEarlyZ = true; // is gpu dependent and must be set in renderer
 	g_Config.backend_info.bSupportsOversizedViewports = true;
+	g_Config.backend_info.bSupportsGeometryShaders = true;
+	g_Config.backend_info.bSupports3DVision = false;
+	g_Config.backend_info.bSupportsPostProcessing = true;
+	g_Config.backend_info.bSupportsSSAA = true;
 
 	g_Config.backend_info.Adapters.clear();
 
-	// aamodes
-	const char* caamodes[] = {_trans("None"), "2x", "4x", "8x", "4x SSAA"};
-	g_Config.backend_info.AAModes.assign(caamodes, caamodes + sizeof(caamodes)/sizeof(*caamodes));
+	// aamodes - 1 is to stay consistent with D3D (means no AA)
+	g_Config.backend_info.AAModes = { 1, 2, 4, 8 };
 
 	// pp shaders
-	GetShaders(g_Config.backend_info.PPShaders);
+	g_Config.backend_info.PPShaders = GetShaders("");
+	g_Config.backend_info.AnaglyphShaders = GetShaders(ANAGLYPH_DIR DIR_SEP);
 }
 
 void VideoBackend::ShowConfig(void *_hParent)
 {
-	InitBackendInfo();
-	Host_ShowVideoConfig(_hParent, GetDisplayName(), "gfx_opengl");
+	if (!s_BackendInitialized)
+		InitBackendInfo();
+	Host_ShowVideoConfig(_hParent, GetDisplayName(), GetConfigName());
 }
 
-bool VideoBackend::Initialize(void *&window_handle)
+bool VideoBackend::Initialize(void *window_handle)
 {
 	InitializeShared();
 	InitBackendInfo();
 
 	frameCount = 0;
 
-	g_Config.Load(File::GetUserPath(D_CONFIG_IDX) + "gfx_opengl.ini");
+	g_Config.Load(File::GetUserPath(D_CONFIG_IDX) + GetConfigName() + ".ini");
 	g_Config.GameIniLoad();
 	g_Config.UpdateProjectionHack();
 	g_Config.VerifyValidity();
@@ -189,28 +184,25 @@ void VideoBackend::Video_Prepare()
 
 	g_renderer = new Renderer;
 
-	s_efbAccessRequested = false;
-	s_FifoShuttingDown = false;
-	s_swapRequested = false;
-
 	CommandProcessor::Init();
 	PixelEngine::Init();
 
 	BPInit();
 	g_vertex_manager = new VertexManager;
-	g_perf_query = new PerfQuery;
+	g_perf_query = GetPerfQuery();
 	Fifo_Init(); // must be done before OpcodeDecoder_Init()
 	OpcodeDecoder_Init();
 	IndexGenerator::Init();
 	VertexShaderManager::Init();
 	PixelShaderManager::Init();
+	GeometryShaderManager::Init();
 	ProgramShaderCache::Init();
 	g_texture_cache = new TextureCache();
 	g_sampler_cache = new SamplerCache();
 	Renderer::Init();
-	GL_REPORT_ERRORD();
 	VertexLoaderManager::Init();
 	TextureConverter::Init();
+	BoundingBox::Init();
 
 	// Notify the core that the video backend is ready
 	Host_Message(WM_USER_CREATE);
@@ -224,20 +216,20 @@ void VideoBackend::Shutdown()
 	OSD::DoCallbacks(OSD::OSD_SHUTDOWN);
 
 	GLInterface->Shutdown();
+	delete GLInterface;
+	GLInterface = nullptr;
 }
 
-void VideoBackend::Video_Cleanup() {
-
+void VideoBackend::Video_Cleanup()
+{
 	if (g_renderer)
 	{
-		s_efbAccessRequested = false;
-		s_FifoShuttingDown = false;
-		s_swapRequested = false;
 		Fifo_Shutdown();
 
 		// The following calls are NOT Thread Safe
 		// And need to be called from the video thread
 		Renderer::Shutdown();
+		BoundingBox::Shutdown();
 		TextureConverter::Shutdown();
 		VertexLoaderManager::Shutdown();
 		delete g_sampler_cache;
@@ -247,6 +239,7 @@ void VideoBackend::Video_Cleanup() {
 		ProgramShaderCache::Shutdown();
 		VertexShaderManager::Shutdown();
 		PixelShaderManager::Shutdown();
+		GeometryShaderManager::Shutdown();
 		delete g_perf_query;
 		g_perf_query = nullptr;
 		delete g_vertex_manager;

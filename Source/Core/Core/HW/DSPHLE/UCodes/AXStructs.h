@@ -1,8 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
+
+#include "Common/CommonTypes.h"
 
 struct PBMixer
 {
@@ -310,7 +312,7 @@ struct AXPBWii
 	u16 pad[12]; // align us, captain! (32B)
 };
 
-// TODO: All these enums have changed a lot for wii
+// TODO: All these enums have changed a lot for Wii
 enum
 {
 	AUDIOFORMAT_ADPCM = 0,

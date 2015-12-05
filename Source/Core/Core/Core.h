@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 
@@ -15,17 +15,14 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
-#include "Core/CoreParameter.h"
-
-// TODO: ugly, remove
-extern bool g_aspect_wide;
 
 namespace Core
 {
 
-// Get core parameters
-// TODO: kill, use SConfig instead
-extern SCoreStartupParameter g_CoreStartupParameter;
+// TODO: ugly, remove
+extern bool g_aspect_wide;
+
+extern bool g_want_determinism;
 
 bool GetIsFramelimiterTempDisabled();
 void SetIsFramelimiterTempDisabled(bool disable);
@@ -44,31 +41,34 @@ bool Init();
 void Stop();
 void Shutdown();
 
-std::string StopMessage(bool, std::string);
+void DeclareAsCPUThread();
+void UndeclareAsCPUThread();
+
+std::string StopMessage(bool, const std::string&);
 
 bool IsRunning();
-bool IsRunningAndStarted(); // is running and the cpu loop has been entered
-bool IsRunningInCurrentThread(); // this tells us whether we are running in the cpu thread.
-bool IsCPUThread(); // this tells us whether we are the cpu thread.
+bool IsRunningAndStarted(); // is running and the CPU loop has been entered
+bool IsRunningInCurrentThread(); // this tells us whether we are running in the CPU thread.
+bool IsCPUThread(); // this tells us whether we are the CPU thread.
 bool IsGPUThread();
 
 void SetState(EState _State);
 EState GetState();
 
 void SaveScreenShot();
+void SaveScreenShot(const std::string& name);
 
 void Callback_WiimoteInterruptChannel(int _number, u16 _channelID, const void* _pData, u32 _Size);
-
-void* GetWindowHandle();
-
 
 // This displays messages in a user-visible way.
 void DisplayMessage(const std::string& message, int time_in_ms);
 
 std::string GetStateFileName();
-void SetStateFileName(std::string val);
+void SetStateFileName(const std::string& val);
 
 void SetBlockStart(u32 addr);
+
+void FrameUpdateOnCPUThread();
 
 bool ShouldSkipFrame(int skipped);
 void VideoThrottle();
@@ -85,5 +85,8 @@ bool PauseAndLock(bool doLock, bool unpauseOnUnlock=true);
 // for calling back into UI code without introducing a dependency on it in core
 typedef void(*StoppedCallbackFunc)(void);
 void SetOnStoppedCallback(StoppedCallbackFunc callback);
+
+// Run on the GUI thread when the factors change.
+void UpdateWantDeterminism(bool initial = false);
 
 }  // namespace

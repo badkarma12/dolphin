@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -18,6 +18,7 @@ struct Statistics
 	int numVertexShadersAlive;
 
 	int numTexturesCreated;
+	int numTexturesUploaded;
 	int numTexturesAlive;
 
 	int numVertexLoaders;
@@ -28,8 +29,6 @@ struct Statistics
 
 	float g2proj_0, g2proj_1, g2proj_2, g2proj_3, g2proj_4, g2proj_5;
 	float g2proj_6, g2proj_7, g2proj_8, g2proj_9, g2proj_10, g2proj_11, g2proj_12, g2proj_13, g2proj_14, g2proj_15;
-
-	std::vector<EFBRectangle> efb_regions;
 
 	struct ThisFrame
 	{

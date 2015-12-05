@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cinttypes>
@@ -9,7 +9,8 @@
 #include <string>
 
 #include "Common/Common.h"
-#include "Common/StdMakeUnique.h"
+#include "Common/FileUtil.h"
+#include "Common/Intrinsics.h"
 #include "Common/StringUtil.h"
 #include "Core/PatchEngine.h"
 #include "Core/HLE/HLE.h"
@@ -135,11 +136,9 @@ ps_adds1
 
 #ifdef _WIN32
 #include <windows.h>
-#include <intrin.h>
 #else
 #include <memory>
 #include <stdint.h>
-#include <x86intrin.h>
 
 #if defined(__clang__)
 #if !__has_builtin(__builtin_ia32_rdtsc)
@@ -147,18 +146,18 @@ static inline uint64_t __rdtsc()
 {
 	uint32_t lo, hi;
 #ifdef _LP64
-	__asm__ __volatile__ ("xorl %%eax,%%eax \n cpuid"
+	__asm__ __volatile__("xorl %%eax,%%eax \n cpuid"
 			::: "%rax", "%rbx", "%rcx", "%rdx");
-	__asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+	__asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
 	return (uint64_t)hi << 32 | lo;
 #else
-	__asm__ __volatile__ (
+	__asm__ __volatile__(
 			"xor    %%eax,%%eax;"
 			"push   %%ebx;"
 			"cpuid;"
 			"pop    %%ebx;"
 			::: "%eax", "%ecx", "%edx");
-	__asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+	__asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
 #endif
 	return (uint64_t)hi << 32 | lo;
 }
@@ -174,20 +173,25 @@ namespace JitILProfiler
 		u64 codeHash;
 		u64 totalElapsed;
 		u64 numberOfCalls;
-		Block() : index(0), codeHash(0), totalElapsed(0), numberOfCalls(0) { }
+
+		Block() : index(0), codeHash(0), totalElapsed(0), numberOfCalls(0)
+		{
+		}
 	};
+
 	static std::vector<Block> blocks;
 	static u32 blockIndex;
 	static u64 beginTime;
 	static Block& Add(u64 codeHash)
 	{
 		const u32 _blockIndex = (u32)blocks.size();
-		blocks.push_back(Block());
+		blocks.emplace_back();
 		Block& block = blocks.back();
 		block.index = _blockIndex;
 		block.codeHash = codeHash;
 		return block;
 	}
+
 	// These functions need to be static because they are called with
 	// ABI_CallFunction().
 	static void Begin(u32 index)
@@ -195,6 +199,7 @@ namespace JitILProfiler
 		blockIndex = index;
 		beginTime = __rdtsc();
 	}
+
 	static void End()
 	{
 		const u64 endTime = __rdtsc();
@@ -203,6 +208,7 @@ namespace JitILProfiler
 		block.totalElapsed += duration;
 		++block.numberOfCalls;
 	}
+
 	struct JitILProfilerFinalizer
 	{
 		virtual ~JitILProfilerFinalizer()
@@ -221,54 +227,40 @@ namespace JitILProfiler
 			}
 		}
 	};
+
 	static std::unique_ptr<JitILProfilerFinalizer> finalizer;
 	static void Init()
 	{
 		finalizer = std::make_unique<JitILProfilerFinalizer>();
 	}
+
 	static void Shutdown()
 	{
 		finalizer.reset();
 	}
 };
 
-static int CODE_SIZE = 1024*1024*32;
-
 void JitIL::Init()
 {
-	jo.optimizeStack = true;
+	EnableBlockLink();
 
-	if (Core::g_CoreStartupParameter.bEnableDebugging)
-	{
-		jo.enableBlocklink = false;
-		Core::g_CoreStartupParameter.bSkipIdle = false;
-	}
-	else
-	{
-		if (!Core::g_CoreStartupParameter.bJITBlockLinking)
-			jo.enableBlocklink = false;
-		else
-			// Speed boost, but not 100% safe
-			jo.enableBlocklink = !Core::g_CoreStartupParameter.bMMU;
-	}
-
-	jo.fpAccurateFcmp = false;
 	jo.optimizeGatherPipe = true;
-	jo.fastInterrupts = false;
 	jo.accurateSinglePrecision = false;
-	js.memcheck = Core::g_CoreStartupParameter.bMMU;
+	UpdateMemoryOptions();
 
-	trampolines.Init();
+	trampolines.Init(jo.memcheck ? TRAMPOLINE_CODE_SIZE_MMU : TRAMPOLINE_CODE_SIZE);
 	AllocCodeSpace(CODE_SIZE);
-
 	blocks.Init();
-	asm_routines.Init();
+	asm_routines.Init(nullptr);
+
+	farcode.Init(jo.memcheck ? FARCODE_SIZE_MMU : FARCODE_SIZE);
 
 	code_block.m_stats = &js.st;
 	code_block.m_gpa = &js.gpa;
 	code_block.m_fpa = &js.fpa;
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		JitILProfiler::Init();
 	}
 }
@@ -282,7 +274,8 @@ void JitIL::ClearCache()
 
 void JitIL::Shutdown()
 {
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		JitILProfiler::Shutdown();
 	}
 
@@ -291,29 +284,7 @@ void JitIL::Shutdown()
 	blocks.Shutdown();
 	trampolines.Shutdown();
 	asm_routines.Shutdown();
-}
-
-
-void JitIL::WriteCallInterpreter(UGeckoInstruction inst)
-{
-	if (js.isLastInstruction)
-	{
-		MOV(32, M(&PC), Imm32(js.compilerPC));
-		MOV(32, M(&NPC), Imm32(js.compilerPC + 4));
-	}
-	Interpreter::_interpreterInstruction instr = GetInterpreterOp(inst);
-	ABI_CallFunctionC((void*)instr, inst.hex);
-	if (js.isLastInstruction)
-	{
-		MOV(32, R(EAX), M(&NPC));
-		WriteRfiExitDestInOpArg(R(EAX));
-	}
-}
-
-void JitIL::unknown_instruction(UGeckoInstruction inst)
-{
-	// CCPU::Break();
-	PanicAlert("unknown_instruction %08x - Fix me ;)", inst.hex);
+	farcode.Shutdown();
 }
 
 void JitIL::FallBackToInterpreter(UGeckoInstruction _inst)
@@ -326,8 +297,8 @@ void JitIL::FallBackToInterpreter(UGeckoInstruction _inst)
 void JitIL::HLEFunction(UGeckoInstruction _inst)
 {
 	ABI_CallFunctionCC((void*)&HLE::Execute, js.compilerPC, _inst.hex);
-	MOV(32, R(EAX), M(&NPC));
-	WriteExitDestInOpArg(R(EAX));
+	MOV(32, R(RSCRATCH), PPCSTATE(npc));
+	WriteExitDestInOpArg(R(RSCRATCH));
 }
 
 void JitIL::DoNothing(UGeckoInstruction _inst)
@@ -352,22 +323,20 @@ static void ImHere()
 			PowerPC::ppcState.gpr[5], PowerPC::ppcState.gpr[6]);
 		f.Flush();
 	}
-	if (been_here.find(PC) != been_here.end()) {
+
+	if (been_here.find(PC) != been_here.end())
+	{
 		been_here.find(PC)->second++;
 		if ((been_here.find(PC)->second) & 1023)
 			return;
 	}
+
 	DEBUG_LOG(DYNA_REC, "I'm here - PC = %08x , LR = %08x", PC, LR);
 	been_here[PC] = 1;
 }
 
 void JitIL::Cleanup()
 {
-	if (jo.optimizeGatherPipe && js.fifoBytesThisBlock > 0)
-	{
-		ABI_CallFunction((void *)&GPFifo::CheckGatherPipe);
-	}
-
 	// SPEED HACK: MMCR0/MMCR1 should be checked at run-time, not at compile time.
 	if (MMCR0.Hex || MMCR1.Hex)
 		ABI_CallFunctionCCC((void *)&PowerPC::UpdatePerformanceMonitor, js.downcountAmount, jit->js.numLoadStoreInst, jit->js.numFloatingPointInst);
@@ -376,10 +345,11 @@ void JitIL::Cleanup()
 void JitIL::WriteExit(u32 destination)
 {
 	Cleanup();
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		ABI_CallFunction((void *)JitILProfiler::End);
 	}
-	SUB(32, M(&PowerPC::ppcState.downcount), js.downcountAmount > 127 ? Imm32(js.downcountAmount) : Imm8(js.downcountAmount));
+	SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
 
 	//If nobody has taken care of this yet (this can be removed when all branches are done)
 	JitBlock *b = js.curBlock;
@@ -398,50 +368,53 @@ void JitIL::WriteExit(u32 destination)
 	}
 	else
 	{
-		MOV(32, M(&PC), Imm32(destination));
+		MOV(32, PPCSTATE(pc), Imm32(destination));
 		JMP(asm_routines.dispatcher, true);
 	}
 	b->linkData.push_back(linkData);
 }
 
-void JitIL::WriteExitDestInOpArg(const Gen::OpArg& arg)
+void JitIL::WriteExitDestInOpArg(const OpArg& arg)
 {
-	MOV(32, M(&PC), arg);
+	MOV(32, PPCSTATE(pc), arg);
 	Cleanup();
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		ABI_CallFunction((void *)JitILProfiler::End);
 	}
-	SUB(32, M(&PowerPC::ppcState.downcount), js.downcountAmount > 127 ? Imm32(js.downcountAmount) : Imm8(js.downcountAmount));
+	SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
 	JMP(asm_routines.dispatcher, true);
 }
 
-void JitIL::WriteRfiExitDestInOpArg(const Gen::OpArg& arg)
+void JitIL::WriteRfiExitDestInOpArg(const OpArg& arg)
 {
-	MOV(32, M(&PC), arg);
-	MOV(32, M(&NPC), arg);
+	MOV(32, PPCSTATE(pc), arg);
+	MOV(32, PPCSTATE(npc), arg);
 	Cleanup();
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		ABI_CallFunction((void *)JitILProfiler::End);
 	}
 	ABI_CallFunction(reinterpret_cast<void *>(&PowerPC::CheckExceptions));
-	SUB(32, M(&PowerPC::ppcState.downcount), js.downcountAmount > 127 ? Imm32(js.downcountAmount) : Imm8(js.downcountAmount));
+	SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
 	JMP(asm_routines.dispatcher, true);
 }
 
 void JitIL::WriteExceptionExit()
 {
 	Cleanup();
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling) {
+	if (SConfig::GetInstance().bJITILTimeProfiling)
+	{
 		ABI_CallFunction((void *)JitILProfiler::End);
 	}
-	MOV(32, R(EAX), M(&PC));
-	MOV(32, M(&NPC), R(EAX));
+	MOV(32, R(EAX), PPCSTATE(pc));
+	MOV(32, PPCSTATE(npc), R(EAX));
 	ABI_CallFunction(reinterpret_cast<void *>(&PowerPC::CheckExceptions));
-	SUB(32, M(&PowerPC::ppcState.downcount), js.downcountAmount > 127 ? Imm32(js.downcountAmount) : Imm8(js.downcountAmount));
+	SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
 	JMP(asm_routines.dispatcher, true);
 }
 
-void STACKALIGN JitIL::Run()
+void JitIL::Run()
 {
 	CompiledCode pExecAddr = (CompiledCode)asm_routines.enterCode;
 	pExecAddr();
@@ -474,48 +447,68 @@ void JitIL::Trace()
 #endif
 
 	DEBUG_LOG(DYNA_REC, "JITIL PC: %08x SRR0: %08x SRR1: %08x CRval: %016lx%016lx%016lx%016lx%016lx%016lx%016lx%016lx FPSCR: %08x MSR: %08x LR: %08x %s %s",
-		PC, SRR0, SRR1, PowerPC::ppcState.cr_val[0], PowerPC::ppcState.cr_val[1], PowerPC::ppcState.cr_val[2], PowerPC::ppcState.cr_val[3],
-		PowerPC::ppcState.cr_val[4], PowerPC::ppcState.cr_val[5], PowerPC::ppcState.cr_val[6], PowerPC::ppcState.cr_val[7], PowerPC::ppcState.fpscr,
-		PowerPC::ppcState.msr, PowerPC::ppcState.spr[8], regs.c_str(), fregs.c_str());
+		PC, SRR0, SRR1, (unsigned long) PowerPC::ppcState.cr_val[0], (unsigned long) PowerPC::ppcState.cr_val[1], (unsigned long) PowerPC::ppcState.cr_val[2],
+		(unsigned long) PowerPC::ppcState.cr_val[3], (unsigned long) PowerPC::ppcState.cr_val[4], (unsigned long) PowerPC::ppcState.cr_val[5],
+		(unsigned long) PowerPC::ppcState.cr_val[6], (unsigned long) PowerPC::ppcState.cr_val[7], PowerPC::ppcState.fpscr, PowerPC::ppcState.msr,
+		PowerPC::ppcState.spr[8], regs.c_str(), fregs.c_str());
 }
 
-void STACKALIGN JitIL::Jit(u32 em_address)
+void JitIL::Jit(u32 em_address)
 {
-	if (GetSpaceLeft() < 0x10000 || blocks.IsFull() || Core::g_CoreStartupParameter.bJITNoBlockCache)
+	if (IsAlmostFull() || farcode.IsAlmostFull() || blocks.IsFull() ||
+		SConfig::GetInstance().bJITNoBlockCache)
 	{
 		ClearCache();
 	}
-	int block_num = blocks.AllocateBlock(em_address);
-	JitBlock *b = blocks.GetBlock(block_num);
-	blocks.FinalizeBlock(block_num, jo.enableBlocklink, DoJit(em_address, &code_buffer, b));
-}
 
-const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBlock *b)
-{
-	int blockSize = code_buf->GetSize();
+	int blockSize = code_buffer.GetSize();
 
-	if (Core::g_CoreStartupParameter.bEnableDebugging)
+	if (SConfig::GetInstance().bEnableDebugging)
 	{
+		// We can link blocks as long as we are not single stepping and there are no breakpoints here
+		EnableBlockLink();
+
 		// Comment out the following to disable breakpoints (speed-up)
 		if (!Profiler::g_ProfileBlocks)
 		{
 			if (GetState() == CPU_STEPPING)
+			{
 				blockSize = 1;
+
+				// Do not link this block to other blocks While single stepping
+				jo.enableBlocklink = false;
+			}
 			Trace();
 		}
 	}
 
+	// Analyze the block, collect all instructions it is made of (including inlining,
+	// if that is enabled), reorder instructions for optimal performance, and join joinable instructions.
+	u32 nextPC = analyzer.Analyze(em_address, &code_block, &code_buffer, blockSize);
+
+	if (code_block.m_memory_exception)
+	{
+		// Address of instruction could not be translated
+		NPC = nextPC;
+		PowerPC::ppcState.Exceptions |= EXCEPTION_ISI;
+		PowerPC::CheckExceptions();
+		WARN_LOG(POWERPC, "ISI exception at 0x%08x", nextPC);
+		return;
+	}
+
+	int block_num = blocks.AllocateBlock(em_address);
+	JitBlock *b = blocks.GetBlock(block_num);
+	blocks.FinalizeBlock(block_num, jo.enableBlocklink, DoJit(em_address, &code_buffer, b, nextPC));
+}
+
+const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBlock *b, u32 nextPC)
+{
 	js.isLastInstruction = false;
 	js.blockStart = em_address;
 	js.fifoBytesThisBlock = 0;
 	js.curBlock = b;
 	jit->js.numLoadStoreInst = 0;
 	jit->js.numFloatingPointInst = 0;
-
-	u32 nextPC = em_address;
-	// Analyze the block, collect all instructions it is made of (including inlining,
-	// if that is enabled), reorder instructions for optimal performance, and join joinable instructions.
-	nextPC = analyzer.Analyze(em_address, &code_block, code_buf, blockSize);
 
 	PPCAnalyst::CodeOp *ops = code_buf->codebuffer;
 
@@ -525,7 +518,7 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 
 	// Downcount flag check. The last block decremented downcounter, and the flag should still be available.
 	FixupBranch skip = J_CC(CC_NBE);
-	MOV(32, M(&PC), Imm32(js.blockStart));
+	MOV(32, PPCSTATE(pc), Imm32(js.blockStart));
 	JMP(asm_routines.doTiming, true);  // downcount hit zero - go doTiming.
 	SetJumpTarget(skip);
 
@@ -538,13 +531,13 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 	if (js.fpa.any)
 	{
 		// This block uses FPU - needs to add FP exception bailout
-		TEST(32, M(&PowerPC::ppcState.msr), Imm32(1 << 13)); //Test FP enabled bit
+		TEST(32, PPCSTATE(msr), Imm32(1 << 13)); //Test FP enabled bit
 		FixupBranch b1 = J_CC(CC_NZ);
 
 		// If a FPU exception occurs, the exception handler will read
 		// from PC.  Update PC with the latest value in case that happens.
-		MOV(32, M(&PC), Imm32(js.blockStart));
-		OR(32, M((void *)&PowerPC::ppcState.Exceptions), Imm32(EXCEPTION_FPU_UNAVAILABLE));
+		MOV(32, PPCSTATE(pc), Imm32(js.blockStart));
+		OR(32, PPCSTATE(Exceptions), Imm32(EXCEPTION_FPU_UNAVAILABLE));
 		WriteExceptionExit();
 
 		SetJumpTarget(b1);
@@ -553,8 +546,8 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 	js.rewriteStart = (u8*)GetCodePtr();
 
 	u64 codeHash = -1;
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling ||
-		SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILOutputIR)
+	if (SConfig::GetInstance().bJITILTimeProfiling ||
+	    SConfig::GetInstance().bJITILOutputIR)
 	{
 		// For profiling and IR Writer
 		for (u32 i = 0; i < code_block.m_num_instructions; i++)
@@ -565,7 +558,7 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 		}
 	}
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILTimeProfiling)
+	if (SConfig::GetInstance().bJITILTimeProfiling)
 	{
 		JitILProfiler::Block& block = JitILProfiler::Add(codeHash);
 		ABI_CallFunctionC((void *)JitILProfiler::Begin, block.index);
@@ -576,8 +569,8 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 	ibuild.Reset();
 
 	js.downcountAmount = 0;
-	if (!Core::g_CoreStartupParameter.bEnableDebugging)
-			js.downcountAmount += PatchEngine::GetSpeedhackCycles(code_block.m_address);
+	if (!SConfig::GetInstance().bEnableDebugging)
+		js.downcountAmount += PatchEngine::GetSpeedhackCycles(code_block.m_address);
 
 	// Translate instructions
 	for (u32 i = 0; i < code_block.m_num_instructions; i++)
@@ -589,16 +582,7 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 		js.downcountAmount += opinfo->numCycles;
 
 		if (i == (code_block.m_num_instructions - 1))
-		{
 			js.isLastInstruction = true;
-			js.next_inst = 0;
-		}
-		else
-		{
-			// help peephole optimizations
-			js.next_inst = ops[i + 1].inst;
-			js.next_compilerPC = ops[i + 1].address;
-		}
 
 		u32 function = HLE::GetFunctionIndex(ops[i].address);
 		if (function != 0)
@@ -612,7 +596,7 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 					HLEFunction(function);
 					if (type == HLE::HLE_HOOK_REPLACE)
 					{
-						MOV(32, R(EAX), M(&NPC));
+						MOV(32, R(EAX), PPCSTATE(npc));
 						jit->js.downcountAmount += jit->js.st.numCycles;
 						WriteExitDestInOpArg(R(EAX));
 						break;
@@ -623,7 +607,7 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 
 		if (!ops[i].skip)
 		{
-			if (js.memcheck && (opinfo->flags & FL_USE_FPU))
+			if (jo.memcheck && (opinfo->flags & FL_USE_FPU))
 			{
 				ibuild.EmitFPExceptionCheck(ibuild.EmitIntConst(ops[i].address));
 			}
@@ -633,14 +617,17 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 				ibuild.EmitExtExceptionCheck(ibuild.EmitIntConst(ops[i].address));
 			}
 
-			if (Core::g_CoreStartupParameter.bEnableDebugging && breakpoints.IsAddressBreakPoint(ops[i].address) && GetState() != CPU_STEPPING)
+			if (SConfig::GetInstance().bEnableDebugging && breakpoints.IsAddressBreakPoint(ops[i].address) && GetState() != CPU_STEPPING)
 			{
+				// Turn off block linking if there are breakpoints so that the Step Over command does not link this block.
+				jo.enableBlocklink = false;
+
 				ibuild.EmitBreakPointCheck(ibuild.EmitIntConst(ops[i].address));
 			}
 
 			JitILTables::CompileInstruction(ops[i]);
 
-			if (js.memcheck && (opinfo->flags & FL_LOADSTORE))
+			if (jo.memcheck && (opinfo->flags & FL_LOADSTORE))
 			{
 				ibuild.EmitDSIExceptionCheck(ibuild.EmitIntConst(ops[i].address));
 			}
@@ -653,39 +640,27 @@ const u8* JitIL::DoJit(u32 em_address, PPCAnalyst::CodeBuffer *code_buf, JitBloc
 		}
 	}
 
-	u32 function = HLE::GetFunctionIndex(jit->js.blockStart);
-	if (function != 0)
-	{
-		int type = HLE::GetFunctionTypeByIndex(function);
-		if (type == HLE::HLE_HOOK_END)
-		{
-			int flags = HLE::GetFunctionFlagsByIndex(function);
-			if (HLE::IsEnabled(flags))
-			{
-				HLEFunction(function);
-			}
-		}
-	}
-
-	if (code_block.m_memory_exception)
-	{
-		ibuild.EmitISIException(ibuild.EmitIntConst(em_address));
-	}
-
 	// Perform actual code generation
 	WriteCode(nextPC);
 
-	b->codeSize = (u32)(GetCodePtr() - normalEntry);
+	b->codeSize = (u32)(GetCodePtr() - start);
 	b->originalSize = code_block.m_num_instructions;
 
 #ifdef JIT_LOG_X86
 	LogGeneratedX86(code_block.m_num_instructions, code_buf, normalEntry, b);
 #endif
 
-	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bJITILOutputIR)
+	if (SConfig::GetInstance().bJITILOutputIR)
 	{
 		ibuild.WriteToFile(codeHash);
 	}
 
 	return normalEntry;
+}
+
+void JitIL::EnableBlockLink()
+{
+	jo.enableBlocklink = true;
+	if (SConfig::GetInstance().bJITNoBlockLinking)
+		jo.enableBlocklink = false;
 }

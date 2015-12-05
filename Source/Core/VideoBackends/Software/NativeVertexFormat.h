@@ -1,19 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
 #include "Common/ChunkFile.h"
 #include "VideoBackends/Software/Vec3.h"
-
-#ifdef WIN32
-#define LOADERDECL __cdecl
-#else
-#define LOADERDECL
-#endif
-
-typedef void (LOADERDECL *TPipelineFunction)();
 
 struct Vec4
 {
@@ -45,12 +37,12 @@ struct OutputVertexData
 		ALP_C
 	};
 
-	Vec3 mvPosition;
-	Vec4 projectedPosition;
-	Vec3 screenPosition;
-	Vec3 normal[3];
-	u8 color[2][4];
-	Vec3 texCoords[8];
+	Vec3 mvPosition = {};
+	Vec4 projectedPosition = {};
+	Vec3 screenPosition = {};
+	Vec3 normal[3] = {};
+	u8 color[2][4] = {};
+	Vec3 texCoords[8] = {};
 
 	void Lerp(float t, OutputVertexData *a, OutputVertexData *b)
 	{

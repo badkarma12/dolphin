@@ -1,10 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 namespace FifoFileStruct
 {
@@ -12,7 +12,7 @@ namespace FifoFileStruct
 enum
 {
 	FILE_ID            = 0x0d01f1f0,
-	VERSION_NUMBER     = 1,
+	VERSION_NUMBER     = 2,
 	MIN_LOADER_VERSION = 1,
 };
 

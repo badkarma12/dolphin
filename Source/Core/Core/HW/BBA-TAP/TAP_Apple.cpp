@@ -1,8 +1,11 @@
-// Copyright 2014 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <fcntl.h>
+
 #include "Common/StringUtil.h"
+#include "Common/Logging/Log.h"
 #include "Core/HW/EXI_Device.h"
 #include "Core/HW/EXI_DeviceEthernet.h"
 
@@ -20,7 +23,7 @@ bool CEXIETHERNET::Activate()
 		return false;
 	}
 
-	readEnabled = false;
+	readEnabled.store(false);
 
 	INFO_LOG(SP1, "BBA initialized.");
 	return true;
@@ -31,7 +34,7 @@ void CEXIETHERNET::Deactivate()
 	close(fd);
 	fd = -1;
 
-	readEnabled = false;
+	readEnabled.store(false);
 	if (readThread.joinable())
 		readThread.join();
 }
@@ -59,7 +62,7 @@ bool CEXIETHERNET::SendFrame(u8* frame, u32 size)
 	}
 }
 
-void ReadThreadHandler(CEXIETHERNET* self)
+static void ReadThreadHandler(CEXIETHERNET* self)
 {
 	while (true)
 	{
@@ -81,7 +84,7 @@ void ReadThreadHandler(CEXIETHERNET* self)
 		{
 			ERROR_LOG(SP1, "Failed to read from BBA, err=%d", readBytes);
 		}
-		else if (self->readEnabled)
+		else if (self->readEnabled.load())
 		{
 			INFO_LOG(SP1, "Read data: %s", ArrayToString(self->mRecvBuffer, readBytes, 0x10).c_str());
 			self->mRecvBufferLength = readBytes;
@@ -101,11 +104,11 @@ bool CEXIETHERNET::RecvStart()
 	if (!readThread.joinable())
 		RecvInit();
 
-	readEnabled = true;
+	readEnabled.store(true);
 	return true;
 }
 
 void CEXIETHERNET::RecvStop()
 {
-	readEnabled = false;
+	readEnabled.store(false);
 }

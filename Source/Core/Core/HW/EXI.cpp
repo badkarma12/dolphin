@@ -1,30 +1,41 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include "Common/ChunkFile.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 #include "Core/ConfigManager.h"
 #include "Core/CoreTiming.h"
 #include "Core/Movie.h"
 #include "Core/HW/EXI.h"
+#include "Core/HW/EXI_Channel.h"
 #include "Core/HW/MMIO.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/Sram.h"
 #include "Core/PowerPC/PowerPC.h"
 
 SRAM g_SRAM;
+bool g_SRAM_netplay_initialized = false;
 
 namespace ExpansionInterface
 {
 
 static int changeDevice;
+static int updateInterrupts;
 
 static CEXIChannel *g_Channels[MAX_EXI_CHANNELS];
+
+static void ChangeDeviceCallback(u64 userdata, int cyclesLate);
+static void UpdateInterruptsCallback(u64 userdata, int cycles_late);
+
 void Init()
 {
-	InitSRAM();
+	if (!g_SRAM_netplay_initialized)
+	{
+		InitSRAM();
+	}
+
 	for (u32 i = 0; i < MAX_EXI_CHANNELS; i++)
 		g_Channels[i] = new CEXIChannel(i);
 
@@ -43,6 +54,7 @@ void Init()
 	g_Channels[2]->AddDevice(EXIDEVICE_AD16,                            0);
 
 	changeDevice = CoreTiming::RegisterEvent("ChangeEXIDevice", ChangeDeviceCallback);
+	updateInterrupts = CoreTiming::RegisterEvent("EXIUpdateInterrupts", UpdateInterruptsCallback);
 }
 
 void Shutdown()
@@ -80,7 +92,7 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 	}
 }
 
-void ChangeDeviceCallback(u64 userdata, int cyclesLate)
+static void ChangeDeviceCallback(u64 userdata, int cyclesLate)
 {
 	u8 channel = (u8)(userdata >> 32);
 	u8 type = (u8)(userdata >> 16);
@@ -126,6 +138,21 @@ void UpdateInterrupts()
 		causeInt |= channel->IsCausingInterrupt();
 
 	ProcessorInterface::SetInterrupt(ProcessorInterface::INT_CAUSE_EXI, causeInt);
+}
+
+static void UpdateInterruptsCallback(u64 userdata, int cycles_late)
+{
+	UpdateInterrupts();
+}
+
+void ScheduleUpdateInterrupts_Threadsafe(int cycles_late)
+{
+	CoreTiming::ScheduleEvent_Threadsafe(cycles_late, updateInterrupts, 0);
+}
+
+void ScheduleUpdateInterrupts(int cycles_late)
+{
+	CoreTiming::ScheduleEvent(cycles_late, updateInterrupts, 0);
 }
 
 } // end of namespace ExpansionInterface

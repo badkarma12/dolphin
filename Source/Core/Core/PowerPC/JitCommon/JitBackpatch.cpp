@@ -1,27 +1,17 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2008 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <cinttypes>
-#include <string>
 
 #include "disasm.h"
 
-#include "Common/Common.h"
-#include "Common/StringUtil.h"
-#include "Core/PowerPC/JitCommon/JitBackpatch.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
-
-#ifdef _WIN32
-	#include <windows.h>
-#endif
-
 
 using namespace Gen;
 
-extern u8 *trampolineCodePtr;
-
-static void BackPatchError(const std::string &text, u8 *codePtr, u32 emAddress) {
+static void BackPatchError(const std::string &text, u8 *codePtr, u32 emAddress)
+{
 	u64 code_addr = (u64)codePtr;
 	disassembler disasm;
 	char disbuf[256];
@@ -34,198 +24,104 @@ static void BackPatchError(const std::string &text, u8 *codePtr, u32 emAddress) 
 	return;
 }
 
-void TrampolineCache::Init()
+// This generates some fairly heavy trampolines, but it doesn't really hurt.
+// Only instructions that access I/O will get these, and there won't be that
+// many of them in a typical program/game.
+bool Jitx86Base::HandleFault(uintptr_t access_address, SContext* ctx)
 {
-	AllocCodeSpace(4 * 1024 * 1024);
+	// TODO: do we properly handle off-the-end?
+	if (access_address >= (uintptr_t)Memory::physical_base && access_address < (uintptr_t)Memory::physical_base + 0x100010000)
+		return BackPatch((u32)(access_address - (uintptr_t)Memory::physical_base), ctx);
+	if (access_address >= (uintptr_t)Memory::logical_base && access_address < (uintptr_t)Memory::logical_base + 0x100010000)
+		return BackPatch((u32)(access_address - (uintptr_t)Memory::logical_base), ctx);
+
+
+	return false;
 }
 
-void TrampolineCache::Shutdown()
+bool Jitx86Base::BackPatch(u32 emAddress, SContext* ctx)
 {
-	FreeCodeSpace();
-}
+	u8* codePtr = (u8*) ctx->CTX_PC;
 
-// Extremely simplistic - just generate the requested trampoline. May reuse them in the future.
-const u8 *TrampolineCache::GetReadTrampoline(const InstructionInfo &info, u32 registersInUse)
-{
-	if (GetSpaceLeft() < 1024)
-		PanicAlert("Trampoline cache full");
-
-	const u8 *trampoline = GetCodePtr();
-	X64Reg addrReg = (X64Reg)info.scaledReg;
-	X64Reg dataReg = (X64Reg)info.regOperandReg;
-
-	// It's a read. Easy.
-	// It ought to be necessary to align the stack here.  Since it seems to not
-	// affect anybody, I'm not going to add it just to be completely safe about
-	// performance.
-
-	if (addrReg != ABI_PARAM1)
-		MOV(32, R(ABI_PARAM1), R((X64Reg)addrReg));
-	if (info.displacement) {
-		ADD(32, R(ABI_PARAM1), Imm32(info.displacement));
-	}
-	ABI_PushRegistersAndAdjustStack(registersInUse, true);
-	switch (info.operandSize)
-	{
-	case 4:
-		CALL((void *)&Memory::Read_U32);
-		break;
-	case 2:
-		CALL((void *)&Memory::Read_U16);
-		SHL(32, R(EAX), Imm8(16));
-		break;
-	case 1:
-		CALL((void *)&Memory::Read_U8);
-		break;
-	}
-
-	if (info.signExtend && info.operandSize == 1)
-	{
-		// Need to sign extend value from Read_U8.
-		MOVSX(32, 8, dataReg, R(EAX));
-	}
-	else if (dataReg != EAX)
-	{
-		MOV(32, R(dataReg), R(EAX));
-	}
-
-	ABI_PopRegistersAndAdjustStack(registersInUse, true);
-	RET();
-	return trampoline;
-}
-
-// Extremely simplistic - just generate the requested trampoline. May reuse them in the future.
-const u8 *TrampolineCache::GetWriteTrampoline(const InstructionInfo &info, u32 registersInUse)
-{
-	if (GetSpaceLeft() < 1024)
-		PanicAlert("Trampoline cache full");
-
-	const u8 *trampoline = GetCodePtr();
-
-	X64Reg dataReg = (X64Reg)info.regOperandReg;
-	X64Reg addrReg = (X64Reg)info.scaledReg;
-
-	// It's a write. Yay. Remember that we don't have to be super efficient since it's "just" a
-	// hardware access - we can take shortcuts.
-	// Don't treat FIFO writes specially for now because they require a burst
-	// check anyway.
-
-	if (dataReg == ABI_PARAM2)
-		PanicAlert("Incorrect use of SafeWriteRegToReg");
-	if (addrReg != ABI_PARAM1)
-	{
-		if (ABI_PARAM1 != dataReg)
-			MOV(64, R(ABI_PARAM1), R((X64Reg)dataReg));
-		if (ABI_PARAM2 != addrReg)
-			MOV(64, R(ABI_PARAM2), R((X64Reg)addrReg));
-	}
-	else
-	{
-		if (ABI_PARAM2 != addrReg)
-			MOV(64, R(ABI_PARAM2), R((X64Reg)addrReg));
-		if (ABI_PARAM1 != dataReg)
-			MOV(64, R(ABI_PARAM1), R((X64Reg)dataReg));
-	}
-
-	if (info.displacement)
-	{
-		ADD(32, R(ABI_PARAM2), Imm32(info.displacement));
-	}
-
-	ABI_PushRegistersAndAdjustStack(registersInUse, true);
-	switch (info.operandSize)
-	{
-	case 8:
-		CALL((void *)&Memory::Write_U64);
-		break;
-	case 4:
-		CALL((void *)&Memory::Write_U32);
-		break;
-	case 2:
-		CALL((void *)&Memory::Write_U16);
-		break;
-	case 1:
-		CALL((void *)&Memory::Write_U8);
-		break;
-	}
-
-	ABI_PopRegistersAndAdjustStack(registersInUse, true);
-	RET();
-
-	return trampoline;
-}
-
-
-// This generates some fairly heavy trampolines, but:
-// 1) It's really necessary. We don't know anything about the context.
-// 2) It doesn't really hurt. Only instructions that access I/O will get these, and there won't be
-//    that many of them in a typical program/game.
-const u8 *Jitx86Base::BackPatch(u8 *codePtr, u32 emAddress, void *ctx_void)
-{
-	SContext *ctx = (SContext *)ctx_void;
-
-	if (!jit->IsInCodeSpace(codePtr))
-		return nullptr;  // this will become a regular crash real soon after this
+	if (!IsInSpace(codePtr))
+		return false;  // this will become a regular crash real soon after this
 
 	InstructionInfo info = {};
 
-	if (!DisassembleMov(codePtr, &info)) {
+	if (!DisassembleMov(codePtr, &info))
+	{
 		BackPatchError("BackPatch - failed to disassemble MOV instruction", codePtr, emAddress);
-		return nullptr;
+		return false;
 	}
 
-	if (info.otherReg != RBX)
+	if (info.otherReg != RMEM)
 	{
-		PanicAlert("BackPatch : Base reg not RBX."
+		PanicAlert("BackPatch : Base reg not RMEM."
 		           "\n\nAttempted to access %08x.", emAddress);
-		return nullptr;
+		return false;
 	}
 
 	if (info.byteSwap && info.instructionSize < BACKPATCH_SIZE)
 	{
 		PanicAlert("BackPatch: MOVBE is too small");
-		return nullptr;
+		return false;
 	}
 
 	auto it = registersInUseAtLoc.find(codePtr);
 	if (it == registersInUseAtLoc.end())
 	{
 		PanicAlert("BackPatch: no register use entry for address %p", codePtr);
-		return nullptr;
+		return false;
 	}
 
-	u32 registersInUse = it->second;
+	BitSet32 registersInUse = it->second;
 
+	u8* exceptionHandler = nullptr;
+	if (jit->jo.memcheck)
+	{
+		auto it2 = exceptionHandlerAtLoc.find(codePtr);
+		if (it2 != exceptionHandlerAtLoc.end())
+			exceptionHandler = it2->second;
+	}
+
+	// Compute the start and length of the memory operation, including
+	// any byteswapping.
+	int totalSize = info.instructionSize;
+	u8 *start = codePtr;
 	if (!info.isMemoryWrite)
 	{
-		XEmitter emitter(codePtr);
-		int bswapNopCount;
-		if (info.byteSwap || info.operandSize == 1)
-			bswapNopCount = 0;
-		// Check the following BSWAP for REX byte
-		else if ((codePtr[info.instructionSize] & 0xF0) == 0x40)
-			bswapNopCount = 3;
-		else
-			bswapNopCount = 2;
-
-		const u8 *trampoline = trampolines.GetReadTrampoline(info, registersInUse);
-		emitter.CALL((void *)trampoline);
-		int padding = info.instructionSize + bswapNopCount - BACKPATCH_SIZE;
-		if (padding > 0)
+		// MOVBE and single bytes don't need to be swapped.
+		if (!info.byteSwap && info.operandSize > 1)
 		{
-			emitter.NOP(padding);
+			// REX
+			if ((codePtr[totalSize] & 0xF0) == 0x40)
+				totalSize++;
+
+			// BSWAP
+			if (codePtr[totalSize] == 0x0F && (codePtr[totalSize + 1] & 0xF8) == 0xC8)
+				totalSize += 2;
+
+			if (info.operandSize == 2)
+			{
+				// operand size override
+				if (codePtr[totalSize] == 0x66)
+					totalSize++;
+				// REX
+				if ((codePtr[totalSize] & 0xF0) == 0x40)
+					totalSize++;
+				// SAR/ROL
+				_assert_(codePtr[totalSize] == 0xC1 && (codePtr[totalSize + 2] == 0x10 ||
+				                                        codePtr[totalSize + 2] == 0x08));
+				info.signExtend = (codePtr[totalSize + 1] & 0x10) != 0;
+				totalSize += 3;
+			}
 		}
-		return codePtr;
 	}
 	else
 	{
-		// TODO: special case FIFO writes. Also, support 32-bit mode.
-
-		u8 *start;
-		if (info.byteSwap)
+		if (info.byteSwap || info.hasImmediate)
 		{
 			// The instruction is a MOVBE but it failed so the value is still in little-endian byte order.
-			start = codePtr;
 		}
 		else
 		{
@@ -251,15 +147,45 @@ const u8 *Jitx86Base::BackPatch(u8 *codePtr, u32 emAddress, void *ctx_void)
 				break;
 			}
 			start = codePtr - bswapSize;
+			totalSize += bswapSize;
 		}
-		XEmitter emitter(start);
-		const u8 *trampoline = trampolines.GetWriteTrampoline(info, registersInUse);
-		emitter.CALL((void *)trampoline);
-		int padding = codePtr + info.instructionSize - emitter.GetCodePtr();
-		if (padding > 0)
-		{
-			emitter.NOP(padding);
-		}
-		return start;
 	}
+
+	// In the trampoline code, we jump back into the block at the beginning
+	// of the next instruction. The next instruction comes immediately
+	// after the backpatched operation, or BACKPATCH_SIZE bytes after the start
+	// of the backpatched operation, whichever comes last. (The JIT inserts NOPs
+	// into the original code if necessary to ensure there is enough space
+	// to insert the backpatch jump.)
+	int padding = totalSize > BACKPATCH_SIZE ? totalSize - BACKPATCH_SIZE : 0;
+	u8* returnPtr = start + 5 + padding;
+
+	// Generate the trampoline.
+	const u8* trampoline;
+	if (info.isMemoryWrite)
+	{
+		// TODO: special case FIFO writes.
+		auto it3 = pcAtLoc.find(codePtr);
+		if (it3 == pcAtLoc.end())
+		{
+			PanicAlert("BackPatch: no pc entry for address %p", codePtr);
+			return false;
+		}
+
+		u32 pc = it3->second;
+		trampoline = trampolines.GenerateWriteTrampoline(info, registersInUse, exceptionHandler, returnPtr, pc);
+	}
+	else
+	{
+		trampoline = trampolines.GenerateReadTrampoline(info, registersInUse, exceptionHandler, returnPtr);
+	}
+
+	// Patch the original memory operation.
+	XEmitter emitter(start);
+	emitter.JMP(trampoline, true);
+	for (int i = 0; i < padding; ++i)
+		emitter.INT3();
+	ctx->CTX_PC = (u64)start;
+
+	return true;
 }

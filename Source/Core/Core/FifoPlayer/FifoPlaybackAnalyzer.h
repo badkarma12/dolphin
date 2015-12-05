@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2011 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -22,7 +22,7 @@ class FifoPlaybackAnalyzer
 public:
 	FifoPlaybackAnalyzer();
 
-	void AnalyzeFrames(FifoDataFile *file, std::vector<AnalyzedFrameInfo> &frameInfo);
+	void AnalyzeFrames(FifoDataFile* file, std::vector<AnalyzedFrameInfo>& frameInfo);
 
 private:
 	struct MemoryRange
@@ -31,10 +31,9 @@ private:
 		u32 end;
 	};
 
-	void AddMemoryUpdate(MemoryUpdate memUpdate, AnalyzedFrameInfo &frameInfo);
+	void AddMemoryUpdate(MemoryUpdate memUpdate, AnalyzedFrameInfo& frameInfo);
 
-	u32 DecodeCommand(u8 *data);
-	void LoadBP(u32 value0);
+	u32 DecodeCommand(u8* data);
 
 	void StoreEfbCopyRegion();
 	void StoreWrittenRegion(u32 address, u32 size);

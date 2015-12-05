@@ -1,11 +1,11 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <atomic>
 #include <string>
 
-#include "Common/Atomic.h"
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Common/StringUtil.h"
 #include "Common/Logging/LogManager.h"
@@ -16,16 +16,14 @@
 #include "Core/HW/Memmap.h"
 #include "Core/HW/VideoInterface.h"
 
-#include "VideoBackends/OGL/GLInterfaceBase.h"
-#include "VideoBackends/OGL/GLExtensions/GLExtensions.h"
 #include "VideoBackends/Software/BPMemLoader.h"
 #include "VideoBackends/Software/Clipper.h"
 #include "VideoBackends/Software/DebugUtil.h"
 #include "VideoBackends/Software/EfbInterface.h"
-#include "VideoBackends/Software/HwRasterizer.h"
 #include "VideoBackends/Software/OpcodeDecoder.h"
 #include "VideoBackends/Software/Rasterizer.h"
 #include "VideoBackends/Software/SWCommandProcessor.h"
+#include "VideoBackends/Software/SWOGLWindow.h"
 #include "VideoBackends/Software/SWRenderer.h"
 #include "VideoBackends/Software/SWStatistics.h"
 #include "VideoBackends/Software/SWVertexLoader.h"
@@ -33,6 +31,7 @@
 #include "VideoBackends/Software/VideoBackend.h"
 #include "VideoBackends/Software/XFMemLoader.h"
 
+#include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/PixelEngine.h"
@@ -40,7 +39,7 @@
 
 #define VSYNC_ENABLED 0
 
-static volatile u32 s_swapRequested = false;
+static std::atomic<bool> s_swapRequested;
 
 static volatile struct
 {
@@ -52,8 +51,8 @@ static volatile struct
 namespace SW
 {
 
-static volatile bool fifoStateRun = false;
-static volatile bool emuRunningState = false;
+static std::atomic<bool> fifoStateRun;
+static std::atomic<bool> emuRunningState;
 static std::mutex m_csSWVidOccupied;
 
 std::string VideoSoftware::GetName() const
@@ -66,22 +65,21 @@ std::string VideoSoftware::GetDisplayName() const
 	return "Software Renderer";
 }
 
-void VideoSoftware::ShowConfig(void *hParent)
+std::string VideoSoftware::GetConfigName() const
 {
-	Host_ShowVideoConfig(hParent, GetDisplayName(), "gfx_software");
+	return "gfx_software";
 }
 
-bool VideoSoftware::Initialize(void *&window_handle)
+void VideoSoftware::ShowConfig(void *hParent)
 {
-	g_SWVideoConfig.Load((File::GetUserPath(D_CONFIG_IDX) + "gfx_software.ini").c_str());
+	Host_ShowVideoConfig(hParent, GetDisplayName(), GetConfigName());
+}
 
-	InitInterface();
-	GLInterface->SetMode(GLInterfaceMode::MODE_DETECT);
-	if (!GLInterface->Create(window_handle))
-	{
-		INFO_LOG(VIDEO, "GLInterface::Create failed.");
-		return false;
-	}
+bool VideoSoftware::Initialize(void *window_handle)
+{
+	g_SWVideoConfig.Load((File::GetUserPath(D_CONFIG_IDX) + GetConfigName() + ".ini").c_str());
+
+	SWOGLWindow::Init(window_handle);
 
 	InitBPMemory();
 	InitXFMemory();
@@ -90,7 +88,6 @@ bool VideoSoftware::Initialize(void *&window_handle)
 	OpcodeDecoder::Init();
 	Clipper::Init();
 	Rasterizer::Init();
-	HwRasterizer::Init();
 	SWRenderer::Init();
 	DebugUtil::Init();
 
@@ -116,14 +113,7 @@ void VideoSoftware::DoState(PointerWrap& p)
 	p.DoPOD(swstats);
 
 	// CP Memory
-	p.DoArray(arraybases, 16);
-	p.DoArray(arraystrides, 16);
-	p.Do(MatrixIndexA);
-	p.Do(MatrixIndexB);
-	p.Do(g_VtxDesc.Hex);
-	p.DoArray(g_VtxAttr, 8);
-	p.DoMarker("CP Memory");
-
+	DoCPState(p);
 }
 
 void VideoSoftware::CheckInvalidState()
@@ -150,59 +140,47 @@ void VideoSoftware::PauseAndLock(bool doLock, bool unpauseOnUnlock)
 
 void VideoSoftware::RunLoop(bool enable)
 {
-	emuRunningState = enable;
+	emuRunningState.store(enable);
 }
 
 void VideoSoftware::EmuStateChange(EMUSTATE_CHANGE newState)
 {
-	emuRunningState = (newState == EMUSTATE_CHANGE_PLAY) ? true : false;
+	emuRunningState.store(newState == EMUSTATE_CHANGE_PLAY);
 }
 
 void VideoSoftware::Shutdown()
 {
 	// TODO: should be in Video_Cleanup
-	HwRasterizer::Shutdown();
 	SWRenderer::Shutdown();
 	DebugUtil::Shutdown();
 
 	// Do our OSD callbacks
 	OSD::DoCallbacks(OSD::OSD_SHUTDOWN);
 
-	GLInterface->Shutdown();
+	SWOGLWindow::Shutdown();
 }
 
 void VideoSoftware::Video_Cleanup()
 {
-	GLInterface->ClearCurrent();
 }
 
 // This is called after Video_Initialize() from the Core
 void VideoSoftware::Video_Prepare()
 {
-	GLInterface->MakeCurrent();
-
-	// Init extension support.
-	if (!GLExtensions::Init())
-	{
-		ERROR_LOG(VIDEO, "GLExtensions::Init failed!Does your video card support OpenGL 2.0?");
-		return;
-	}
-
-	// Handle VSync on/off
-	GLInterface->SwapInterval(VSYNC_ENABLED);
-
 	// Do our OSD callbacks
 	OSD::DoCallbacks(OSD::OSD_INIT);
 
-	HwRasterizer::Prepare();
 	SWRenderer::Prepare();
 
 	INFO_LOG(VIDEO, "Video backend initialized.");
 }
 
 // Run from the CPU thread (from VideoInterface.cpp)
-void VideoSoftware::Video_BeginField(u32 xfbAddr, u32 fbWidth, u32 fbHeight)
+void VideoSoftware::Video_BeginField(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight)
 {
+	// XXX: fbStride should be implemented properly here
+	// If stride isn't implemented then there are problems with XFB
+	// Animal Crossing is a good example for this.
 	s_beginFieldArgs.xfbAddr = xfbAddr;
 	s_beginFieldArgs.fbWidth = fbWidth;
 	s_beginFieldArgs.fbHeight = fbHeight;
@@ -222,14 +200,11 @@ void VideoSoftware::Video_EndField()
 		Core::Callback_VideoCopiedToXFB(false);
 		return;
 	}
-	if (!g_SWVideoConfig.bHwRasterizer)
+	if (!g_SWVideoConfig.bBypassXFB)
 	{
-		if (!g_SWVideoConfig.bBypassXFB)
-		{
-			EfbInterface::yuv422_packed *xfb = (EfbInterface::yuv422_packed *) Memory::GetPointer(s_beginFieldArgs.xfbAddr);
+		EfbInterface::yuv422_packed *xfb = (EfbInterface::yuv422_packed *) Memory::GetPointer(s_beginFieldArgs.xfbAddr);
 
-			SWRenderer::UpdateColorTexture(xfb, s_beginFieldArgs.fbWidth, s_beginFieldArgs.fbHeight);
-		}
+		SWRenderer::UpdateColorTexture(xfb, s_beginFieldArgs.fbWidth, s_beginFieldArgs.fbHeight);
 	}
 
 	// Ideally we would just move all the OpenGL context stuff to the CPU thread,
@@ -243,8 +218,8 @@ void VideoSoftware::Video_EndField()
 		DebugUtil::OnFrameEnd(s_beginFieldArgs.fbWidth, s_beginFieldArgs.fbHeight);
 
 		// If we are in dual core mode, notify the GPU thread about the new color texture.
-		if (SConfig::GetInstance().m_LocalCoreStartupParameter.bCPUThread)
-			Common::AtomicStoreRelease(s_swapRequested, true);
+		if (SConfig::GetInstance().bCPUThread)
+			s_swapRequested.store(true);
 		else
 			SWRenderer::Swap(s_beginFieldArgs.fbWidth, s_beginFieldArgs.fbHeight);
 	}
@@ -287,6 +262,11 @@ u32 VideoSoftware::Video_GetQueryResult(PerfQueryType type)
 	return EfbInterface::perf_values[type];
 }
 
+u16 VideoSoftware::Video_GetBoundingBox(int index)
+{
+	return BoundingBox::coords[index];
+}
+
 bool VideoSoftware::Video_Screenshot(const std::string& filename)
 {
 	SWRenderer::SetScreenshot(filename.c_str());
@@ -296,10 +276,10 @@ bool VideoSoftware::Video_Screenshot(const std::string& filename)
 // Run from the graphics thread
 static void VideoFifo_CheckSwapRequest()
 {
-	if (Common::AtomicLoadAcquire(s_swapRequested))
+	if (s_swapRequested.load())
 	{
 		SWRenderer::Swap(s_beginFieldArgs.fbWidth, s_beginFieldArgs.fbHeight);
-		Common::AtomicStoreRelease(s_swapRequested, false);
+		s_swapRequested.store(false);
 	}
 }
 
@@ -309,9 +289,9 @@ static void VideoFifo_CheckSwapRequest()
 void VideoSoftware::Video_EnterLoop()
 {
 	std::lock_guard<std::mutex> lk(m_csSWVidOccupied);
-	fifoStateRun = true;
+	fifoStateRun.store(true);
 
-	while (fifoStateRun)
+	while (fifoStateRun.load())
 	{
 		VideoFifo_CheckSwapRequest();
 		g_video_backend->PeekMessages();
@@ -321,7 +301,7 @@ void VideoSoftware::Video_EnterLoop()
 			Common::YieldCPU();
 		}
 
-		while (!emuRunningState && fifoStateRun)
+		while (!emuRunningState.load() && fifoStateRun.load())
 		{
 			g_video_backend->PeekMessages();
 			VideoFifo_CheckSwapRequest();
@@ -334,7 +314,7 @@ void VideoSoftware::Video_EnterLoop()
 
 void VideoSoftware::Video_ExitLoop()
 {
-	fifoStateRun = false;
+	fifoStateRun.store(false);
 }
 
 // TODO : could use the OSD class in video common, we would need to implement the Renderer class
@@ -356,11 +336,6 @@ void VideoSoftware::Video_GatherPipeBursted()
 	SWCommandProcessor::GatherPipeBursted();
 }
 
-bool VideoSoftware::Video_IsPossibleWaitingSetDrawDone(void)
-{
-	return false;
-}
-
 void VideoSoftware::RegisterCPMMIO(MMIO::Mapping* mmio, u32 base)
 {
 	SWCommandProcessor::RegisterMMIO(mmio, base);
@@ -369,13 +344,7 @@ void VideoSoftware::RegisterCPMMIO(MMIO::Mapping* mmio, u32 base)
 // Draw messages on top of the screen
 unsigned int VideoSoftware::PeekMessages()
 {
-	return GLInterface->PeekMessages();
-}
-
-// Show the current FPS
-void VideoSoftware::UpdateFPSDisplay(const std::string& text)
-{
-	GLInterface->UpdateFPSDisplay(StringFromFormat("%s | Software | %s", scm_rev_str, text.c_str()));
+	return SWOGLWindow::s_instance->PeekMessages();
 }
 
 }

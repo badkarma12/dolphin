@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2010 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <wx/chartype.h>
@@ -9,7 +9,7 @@
 
 #include "DolphinWX/WXInputBase.h"
 
-namespace InputCommon
+namespace WxUtils
 {
 
 const wxString WXKeyToString(int keycode)

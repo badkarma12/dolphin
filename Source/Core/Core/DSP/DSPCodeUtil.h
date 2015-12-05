@@ -1,5 +1,5 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2009 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #pragma once
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "Common/Common.h"
+#include "Common/CommonTypes.h"
 
 bool Assemble(const std::string& text, std::vector<u16> &code, bool force = false);
 bool Disassemble(const std::vector<u16> &code, bool line_numbers, std::string &text);

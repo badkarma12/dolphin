@@ -1,11 +1,12 @@
-// Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2
+// Copyright 2014 Dolphin Emulator Project
+// Licensed under GPLv2+
 // Refer to the license.txt file included.
 
 #include <math.h>
 #include <unordered_map>
 
 #include <wx/button.h>
+#include <wx/checkbox.h>
 #include <wx/notebook.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
@@ -20,8 +21,7 @@
 #include "VideoCommon/RenderBase.h"
 
 PostProcessingConfigDiag::PostProcessingConfigDiag(wxWindow* parent, const std::string& shader)
-	: wxDialog(parent, -1,
-		wxString::Format(_("Post Processing Shader Configuration"))),
+	: wxDialog(parent, wxID_ANY, _("Post Processing Shader Configuration")),
 	  m_shader(shader)
 {
 	// Depending on if we are running already, either use the one from the videobackend
@@ -73,8 +73,8 @@ PostProcessingConfigDiag::PostProcessingConfigDiag(wxWindow* parent, const std::
 	}
 
 	// Generate our UI
-	wxNotebook* const notebook = new wxNotebook(this, -1);
-	wxPanel* const page_general = new wxPanel(notebook, -1);
+	wxNotebook* const notebook = new wxNotebook(this, wxID_ANY);
+	wxPanel* const page_general = new wxPanel(notebook);
 	wxFlexGridSizer* const szr_general = new wxFlexGridSizer(2, 5, 5);
 
 	// Now let's actually populate our window with our information
@@ -84,7 +84,7 @@ PostProcessingConfigDiag::PostProcessingConfigDiag(wxWindow* parent, const std::
 		if (it->HasChildren())
 		{
 			// Options with children get their own tab
-			wxPanel* const page_option = new wxPanel(notebook, -1);
+			wxPanel* const page_option = new wxPanel(notebook);
 			wxFlexGridSizer* const szr_option = new wxFlexGridSizer(2, 10, 5);
 			it->GenerateUI(this, page_option, szr_option);
 
@@ -202,7 +202,7 @@ void PostProcessingConfigDiag::ConfigGrouping::GenerateUI(PostProcessingConfigDi
 			wxTextCtrl* text_ctrl = new wxTextCtrl(parent, wxID_ANY, string_value);
 
 			// Disable the textctrl, it's only there to show the absolute value from the slider
-			text_ctrl->Enable(false);
+			text_ctrl->Disable();
 
 			// wxWidget takes over the pointer provided to it in the event handler.
 			// This won't be a memory leak, it'll be destroyed on dialog close.
@@ -290,7 +290,6 @@ void PostProcessingConfigDiag::Event_Slider(wxCommandEvent &ev)
 			s32 value = option_data.m_integer_step_values[i] * current_step + option_data.m_integer_min_values[i];
 			m_post_processor->SetOptioni(config->GetOption(), i, value);
 			string_value = std::to_string(value);
-
 		}
 		else
 		{
